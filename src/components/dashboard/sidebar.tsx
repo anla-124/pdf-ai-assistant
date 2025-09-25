@@ -23,8 +23,7 @@ type NavItem = {
 
 const navigation: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: Home },
-  // Example with badge:
-  // { name: 'Messages', href: '/messages', icon: MessageSquare, badge: 3 }
+
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: Home },
