@@ -24,11 +24,6 @@ type NavItem = {
 const navigation: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: Home },
 
-
-const navigation = [
-  { name: 'Dashboard', href: '/dashboard', icon: Home },
-]
-
 export function Sidebar() {
   const [isLoading, setIsLoading] = useState(false)
   const pathname = usePathname()
