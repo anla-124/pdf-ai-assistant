@@ -1,53 +1,30 @@
-# dependencies
-/node_modules
-
-# Next.js build
-/.next
-/out
-
-# env files
-.env
-.env.local
-.env.*.local
-
-# logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# system
-.DS_Store
-cat > .gitignore <<'EOF'
-# Node
+# Dependencies
 /node_modules
 /.pnp
 .pnp.js
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
-# Next.js
+# Next.js build output
 /.next
 /out
 /build
 
-# Env
+# Environment variables
 .env
 .env.local
 .env.*.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs
+*.log
+.pnpm-debug.log*
 
 # Editor / OS
 .DS_Store
 .vscode/
 .idea/
 
-# Logs
-logs
-*.log
-EOF
-
-# Credentials
+# Credentials (keep out secrets)
 credentials/
-*.json
-credentials/
-*.json
