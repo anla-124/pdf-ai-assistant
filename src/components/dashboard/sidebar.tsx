@@ -14,6 +14,13 @@ import {
 } from 'lucide-react'
 import Image from 'next/image'
 
+type NavItem = {
+  name: string
+  href: string
+  icon: React.ComponentType<any>
+  badge?: string | number
+}
+
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: Home },
 ]
