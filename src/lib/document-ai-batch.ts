@@ -79,10 +79,6 @@ export class DocumentAIBatchProcessor {
             gcsUri: outputUri,
           },
         },
-        // Enable imageless mode for extended page support
-        processOptions: {
-          imagelessMode: true,
-        },
       }
 
       console.log(`Batch processing request:`, {
