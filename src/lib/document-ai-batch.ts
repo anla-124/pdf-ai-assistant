@@ -92,7 +92,8 @@ export class DocumentAIBatchProcessor {
       })
 
       // Start batch processing operation
-      const [operation] = await client.batchProcessDocuments(request)
+      const response = await client.batchProcessDocuments(request)
+      const operation = Array.isArray(response) ? response[0] : response
       const operationId = operation.name!
 
       console.log(`Batch operation started: ${operationId}`)
