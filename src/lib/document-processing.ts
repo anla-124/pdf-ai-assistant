@@ -68,7 +68,8 @@ export async function processDocument(documentId: string): Promise<void> {
 
     let result;
     try {
-      [result] = await client.processDocument(request)
+      const response = await client.processDocument(request)
+      result = Array.isArray(response) ? response[0] : response
     } catch (error: any) {
       // Handle page limit errors with helpful message
       if (error.code === 3 && error.details?.includes('pages exceed the limit')) {
