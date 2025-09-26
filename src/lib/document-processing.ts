@@ -60,10 +60,6 @@ export async function processDocument(documentId: string): Promise<void> {
         content: base64Content,
         mimeType: 'application/pdf',
       },
-      // Enable imageless mode to support up to 30 pages (vs 15 pages default)
-      processOptions: {
-        imagelessMode: true,
-      },
     }
 
     let result;
