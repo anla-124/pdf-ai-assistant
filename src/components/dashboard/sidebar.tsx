@@ -14,7 +14,15 @@ import {
 } from 'lucide-react'
 import Image from 'next/image'
 
-const navigation = [
+// Type definition for navigation items
+type NavigationItem = {
+  name: string
+  href: string
+  icon: any
+  badge?: string
+}
+
+const navigation: NavigationItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: Home },
 ]
 
