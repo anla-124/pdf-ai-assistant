@@ -118,7 +118,7 @@ export function JobProcessorTest() {
           <strong>💡 How to test:</strong>
           <ol className="mt-1 ml-4 list-decimal text-xs space-y-1">
             <li>Upload a PDF document</li>
-            <li>Click "Process Queued Jobs" to trigger processing</li>
+            <li>Click &quot;Process Queued Jobs&quot; to trigger processing</li>
             <li>Click refresh to see status updates</li>
             <li>Repeat as needed for testing</li>
           </ol>
