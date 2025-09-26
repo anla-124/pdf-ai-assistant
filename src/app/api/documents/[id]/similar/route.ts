@@ -95,20 +95,40 @@ export async function POST(
       .eq('status', 'completed')
     
     // Adaptive searchLimit based on library size
-    // Small libraries (1-100 docs): searchLimit = 50-100
+    // Tiny libraries (1-10 docs): searchLimit = 30-50
+    // Small libraries (10-100 docs): searchLimit = 50-100
     // Medium libraries (100-800 docs): searchLimit = 100-200  
     // Large libraries (800+ docs): searchLimit = 200-250
     const librarySize = totalDocs || 0
-    const baseLimit = Math.max(topK * 10, 50) // Minimum 50
-    const adaptiveLimit = Math.min(250, Math.max(50, Math.floor(librarySize / 8)))
-    const searchLimit = Math.max(baseLimit, adaptiveLimit)
+    
+    let searchLimit
+    if (librarySize <= 10) {
+      // For very small libraries, use minimal search
+      searchLimit = Math.max(topK * 2, 30) // Much more aggressive
+    } else if (librarySize <= 100) {
+      // Small libraries
+      searchLimit = Math.max(topK * 5, 50)
+    } else {
+      // Medium to large libraries  
+      const baseLimit = Math.max(topK * 10, 50)
+      const adaptiveLimit = Math.min(250, Math.max(50, Math.floor(librarySize / 8)))
+      searchLimit = Math.max(baseLimit, adaptiveLimit)
+    }
     
     // Search for similar documents using each chunk from the source document
     const allSimilarVectors = new Map<string, {score: number, text: string, docId: string}>()
     
     console.log(`📊 Library size: ${librarySize} documents`)
     console.log(`🔍 Adaptive searchLimit: ${searchLimit} per chunk (was fixed at 250)`)
-    console.log(`💡 Calculation: Math.max(${baseLimit}, ${adaptiveLimit}) = ${searchLimit}`)
+    if (librarySize <= 10) {
+      console.log(`💡 Tiny library calculation: Math.max(${topK} * 2, 30) = ${searchLimit}`)
+    } else if (librarySize <= 100) {
+      console.log(`💡 Small library calculation: Math.max(${topK} * 5, 50) = ${searchLimit}`)
+    } else {
+      const baseLimit = Math.max(topK * 10, 50)
+      const adaptiveLimit = Math.min(250, Math.max(50, Math.floor(librarySize / 8)))
+      console.log(`💡 Large library calculation: Math.max(${baseLimit}, ${adaptiveLimit}) = ${searchLimit}`)
+    }
     console.log(`Searching with ${sourceEmbeddings.length} source chunks, searchLimit=${searchLimit} per chunk`)
     
     // Search with each source chunk embedding
