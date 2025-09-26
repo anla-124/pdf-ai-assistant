@@ -7,20 +7,16 @@ const storage = new Storage({
 })
 
 export const GCS_CONFIG = {
-  BUCKET_NAME: process.env.GOOGLE_CLOUD_STORAGE_BUCKET || '',
+  BUCKET_NAME: process.env.GOOGLE_CLOUD_STORAGE_BUCKET!,
   BATCH_INPUT_PREFIX: 'batch-processing/input/',
   BATCH_OUTPUT_PREFIX: 'batch-processing/output/',
   TEMP_FILE_TTL_HOURS: 24, // Clean up temp files after 24 hours
 }
 
 export class GCSBatchManager {
-  private bucket = GCS_CONFIG.BUCKET_NAME ? storage.bucket(GCS_CONFIG.BUCKET_NAME) : null
+  private bucket = storage.bucket(GCS_CONFIG.BUCKET_NAME)
 
   async uploadDocumentForBatch(documentId: string, fileBuffer: Buffer, filename: string): Promise<string> {
-    if (!this.bucket) {
-      throw new Error('Google Cloud Storage bucket not configured')
-    }
-    
     const gcsFileName = `${GCS_CONFIG.BATCH_INPUT_PREFIX}${documentId}/${filename}`
     const file = this.bucket.file(gcsFileName)
 
@@ -41,10 +37,6 @@ export class GCSBatchManager {
   }
 
   async downloadBatchResults(documentId: string): Promise<any[]> {
-    if (!this.bucket) {
-      throw new Error('Google Cloud Storage bucket not configured')
-    }
-    
     const outputPrefix = `${GCS_CONFIG.BATCH_OUTPUT_PREFIX}${documentId}/`
     console.log(`Looking for batch results with prefix: ${outputPrefix}`)
 
@@ -67,10 +59,6 @@ export class GCSBatchManager {
   }
 
   async cleanupBatchFiles(documentId: string): Promise<void> {
-    if (!this.bucket) {
-      throw new Error('Google Cloud Storage bucket not configured')
-    }
-    
     console.log(`Cleaning up batch files for document: ${documentId}`)
 
     // Delete input files
@@ -101,10 +89,6 @@ export class GCSBatchManager {
   }
 
   async checkBucketAccess(): Promise<boolean> {
-    if (!this.bucket) {
-      return false
-    }
-    
     try {
       const [exists] = await this.bucket.exists()
       if (!exists) {
