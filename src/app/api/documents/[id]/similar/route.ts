@@ -87,10 +87,28 @@ export async function POST(
       pineconeFilter['metadata.tags'] = { $in: filters.tags }
     }
 
+    // Get user's total document count for adaptive search optimization
+    const { count: totalDocs } = await supabase
+      .from('documents')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('status', 'completed')
+    
+    // Adaptive searchLimit based on library size
+    // Small libraries (1-100 docs): searchLimit = 50-100
+    // Medium libraries (100-800 docs): searchLimit = 100-200  
+    // Large libraries (800+ docs): searchLimit = 200-250
+    const librarySize = totalDocs || 0
+    const baseLimit = Math.max(topK * 10, 50) // Minimum 50
+    const adaptiveLimit = Math.min(250, Math.max(50, Math.floor(librarySize / 8)))
+    const searchLimit = Math.max(baseLimit, adaptiveLimit)
+    
     // Search for similar documents using each chunk from the source document
-    const searchLimit = Math.max(topK * 10, 250) // Optimized for large libraries (1500-2000 docs)
     const allSimilarVectors = new Map<string, {score: number, text: string, docId: string}>()
     
+    console.log(`📊 Library size: ${librarySize} documents`)
+    console.log(`🔍 Adaptive searchLimit: ${searchLimit} per chunk (was fixed at 250)`)
+    console.log(`💡 Calculation: Math.max(${baseLimit}, ${adaptiveLimit}) = ${searchLimit}`)
     console.log(`Searching with ${sourceEmbeddings.length} source chunks, searchLimit=${searchLimit} per chunk`)
     
     // Search with each source chunk embedding
