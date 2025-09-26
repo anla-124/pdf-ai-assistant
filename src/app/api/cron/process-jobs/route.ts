@@ -44,6 +44,7 @@ export async function GET(request: NextRequest) {
         id,
         document_id,
         user_id,
+        status,
         attempts,
         max_attempts,
         batch_operation_id,
