@@ -1,0 +1,13 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/process-jobs",
+      "schedule": "*/2 * * * *"
+    }
+  ],
+  "functions": {
+    "src/app/api/cron/process-jobs/route.ts": {
+      "maxDuration": 900
+    }
+  }
+}
