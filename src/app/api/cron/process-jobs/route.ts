@@ -123,7 +123,7 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-      const document = job.documents
+      const document = job.documents?.[0]
       
       if (!document) {
         throw new Error('Document not found')
