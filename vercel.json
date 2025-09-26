@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/process-jobs",
-      "schedule": "*/2 * * * *"
+      "schedule": "*/1 * * * *"
     }
   ],
   "functions": {
