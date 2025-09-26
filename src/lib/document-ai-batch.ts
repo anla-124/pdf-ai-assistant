@@ -136,8 +136,6 @@ export class DocumentAIBatchProcessor {
         operationId,
         status,
         progress,
-        error,
-        metadata: operation.metadata,
       }
 
     } catch (error) {
