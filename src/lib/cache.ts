@@ -1,17 +1,30 @@
 import Redis from 'ioredis'
 
-// For now, let's just use local Redis to avoid build issues
-// We'll add Upstash after successful deployment
-console.log('🔧 Using local Redis for caching')
-const redis = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-  password: process.env.REDIS_PASSWORD,
-  enableReadyCheck: true,
-  maxRetriesPerRequest: 3,
-  lazyConnect: true,
-  showFriendlyErrorStack: true,
-})
+// Initialize Redis with environment detection
+let redis: Redis
+
+if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+  // Production: Use Upstash Redis for Vercel
+  console.log('🚀 Using Upstash Redis for caching')
+  redis = new Redis(process.env.UPSTASH_REDIS_REST_URL, {
+    enableReadyCheck: false,
+    maxRetriesPerRequest: 3,
+    lazyConnect: true,
+    showFriendlyErrorStack: true,
+  })
+} else {
+  // Development: Use local Redis
+  console.log('🔧 Using local Redis for caching')
+  redis = new Redis({
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT || '6379'),
+    password: process.env.REDIS_PASSWORD,
+    enableReadyCheck: true,
+    maxRetriesPerRequest: 3,
+    lazyConnect: true,
+    showFriendlyErrorStack: true,
+  })
+}
 
 // Cache key prefixes
 const CACHE_KEYS = {
