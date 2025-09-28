@@ -116,7 +116,10 @@ export class CacheManager {
   static async getSearchResults(searchHash: string) {
     try {
       const cached = await redis.get(`${CACHE_KEYS.SEARCH_RESULTS}${searchHash}`)
-      return cached ? JSON.parse(cached) : null
+      if (cached) {
+        return typeof cached === 'string' ? JSON.parse(cached) : cached
+      }
+      return null
     } catch (error) {
       console.warn('Cache get search error:', error)
       return null
@@ -125,11 +128,15 @@ export class CacheManager {
 
   static async setSearchResults(searchHash: string, results: any, customTTL?: number) {
     try {
-      await redis.setex(
-        `${CACHE_KEYS.SEARCH_RESULTS}${searchHash}`,
-        customTTL || CACHE_TTL.SEARCH_RESULTS,
-        JSON.stringify(results)
-      )
+      const key = `${CACHE_KEYS.SEARCH_RESULTS}${searchHash}`
+      const value = JSON.stringify(results)
+      const ttl = customTTL || CACHE_TTL.SEARCH_RESULTS
+      
+      if ('setex' in redis) {
+        await (redis as Redis).setex(key, ttl, value)
+      } else {
+        await (redis as UpstashRedis).set(key, value, { ex: ttl })
+      }
     } catch (error) {
       console.warn('Cache set search error:', error)
     }
@@ -139,7 +146,10 @@ export class CacheManager {
   static async getProcessingStatus(documentId: string) {
     try {
       const cached = await redis.get(`${CACHE_KEYS.PROCESSING_STATUS}${documentId}`)
-      return cached ? JSON.parse(cached) : null
+      if (cached) {
+        return typeof cached === 'string' ? JSON.parse(cached) : cached
+      }
+      return null
     } catch (error) {
       console.warn('Cache get status error:', error)
       return null
