@@ -1,16 +1,15 @@
 import Redis from 'ioredis'
+import { Redis as UpstashRedis } from '@upstash/redis'
 
 // Initialize Redis with environment detection
-let redis: Redis
+let redis: Redis | UpstashRedis
 
 if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
   // Production: Use Upstash Redis for Vercel
   console.log('🚀 Using Upstash Redis for caching')
-  redis = new Redis(process.env.UPSTASH_REDIS_REST_URL, {
-    enableReadyCheck: false,
-    maxRetriesPerRequest: 3,
-    lazyConnect: true,
-    showFriendlyErrorStack: true,
+  redis = new UpstashRedis({
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
   })
 } else {
   // Development: Use local Redis
@@ -54,7 +53,10 @@ export class CacheManager {
   static async getDocument(documentId: string) {
     try {
       const cached = await redis.get(`${CACHE_KEYS.DOCUMENT}${documentId}`)
-      return cached ? JSON.parse(cached) : null
+      if (cached) {
+        return typeof cached === 'string' ? JSON.parse(cached) : cached
+      }
+      return null
     } catch (error) {
       console.warn('Cache get error:', error)
       return null
@@ -63,11 +65,18 @@ export class CacheManager {
 
   static async setDocument(documentId: string, document: any, customTTL?: number) {
     try {
-      await redis.setex(
-        `${CACHE_KEYS.DOCUMENT}${documentId}`,
-        customTTL || CACHE_TTL.DOCUMENT,
-        JSON.stringify(document)
-      )
+      const key = `${CACHE_KEYS.DOCUMENT}${documentId}`
+      const value = JSON.stringify(document)
+      const ttl = customTTL || CACHE_TTL.DOCUMENT
+      
+      // Handle different Redis clients
+      if ('setex' in redis) {
+        // ioredis
+        await redis.setex(key, ttl, value)
+      } else {
+        // Upstash Redis
+        await redis.set(key, value, { ex: ttl })
+      }
     } catch (error) {
       console.warn('Cache set error:', error)
     }
@@ -170,8 +179,18 @@ export class CacheManager {
   // Similar documents caching
   static async getSimilarDocuments(documentId: string, filtersHash: string) {
     try {
-      const cached = await redis.get(`${CACHE_KEYS.SIMILAR_DOCS}${documentId}:${filtersHash}`)
-      return cached ? JSON.parse(cached) : null
+      const key = `${CACHE_KEYS.SIMILAR_DOCS}${documentId}:${filtersHash}`
+      console.log(`🔍 Cache GET attempt: ${key}`)
+      
+      const cached = await redis.get(key)
+      
+      if (cached) {
+        console.log(`✅ Cache HIT: ${key}`)
+        return typeof cached === 'string' ? JSON.parse(cached) : cached
+      } else {
+        console.log(`❌ Cache MISS: ${key}`)
+        return null
+      }
     } catch (error) {
       console.warn('Cache get similar docs error:', error)
       return null
@@ -180,11 +199,21 @@ export class CacheManager {
 
   static async setSimilarDocuments(documentId: string, filtersHash: string, results: any) {
     try {
-      await redis.setex(
-        `${CACHE_KEYS.SIMILAR_DOCS}${documentId}:${filtersHash}`,
-        CACHE_TTL.SIMILAR_DOCS,
-        JSON.stringify(results)
-      )
+      const key = `${CACHE_KEYS.SIMILAR_DOCS}${documentId}:${filtersHash}`
+      const value = JSON.stringify(results)
+      
+      console.log(`💾 Cache SET attempt: ${key}`)
+      
+      // Handle different Redis clients
+      if ('setex' in redis) {
+        // ioredis
+        await redis.setex(key, CACHE_TTL.SIMILAR_DOCS, value)
+      } else {
+        // Upstash Redis
+        await redis.set(key, value, { ex: CACHE_TTL.SIMILAR_DOCS })
+      }
+      
+      console.log(`✅ Cache SET success: ${key}`)
     } catch (error) {
       console.warn('Cache set similar docs error:', error)
     }

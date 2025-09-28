@@ -118,7 +118,7 @@ async function getCacheMetrics() {
     if (cacheStats && cacheStats.memory) {
       // Parse Redis memory info
       const memoryLines = cacheStats.memory.split('\n')
-      const usedMemoryLine = memoryLines.find(line => line.startsWith('used_memory_human:'))
+      const usedMemoryLine = memoryLines.find((line: any) => line.startsWith('used_memory_human:'))
       if (usedMemoryLine) {
         memoryUsage = usedMemoryLine.split(':')[1].trim()
       }
@@ -127,7 +127,7 @@ async function getCacheMetrics() {
     if (cacheStats && cacheStats.keyspace) {
       // Parse keyspace info to get total keys
       const keyspaceLines = cacheStats.keyspace.split('\n')
-      const db0Line = keyspaceLines.find(line => line.startsWith('db0:'))
+      const db0Line = keyspaceLines.find((line: any) => line.startsWith('db0:'))
       if (db0Line) {
         const match = db0Line.match(/keys=(\d+)/)
         if (match) {
