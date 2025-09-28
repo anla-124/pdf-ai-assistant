@@ -97,6 +97,7 @@ export class FileValidator {
       isPasswordProtected = analysis.security.isEncrypted
       
       if (isPasswordProtected) {
+        // Only block if we're very confident it's password protected
         issues.push('Password-protected PDFs are not currently supported')
       }
       
@@ -114,6 +115,8 @@ export class FileValidator {
     } catch (error) {
       console.warn('Could not analyze PDF content:', error)
       warnings.push('Could not analyze file content - proceeding with basic validation')
+      // Reset password protection flag if analysis failed
+      isPasswordProtected = false
     }
     
     const fileInfo = {
@@ -142,10 +145,14 @@ export class FileValidator {
     const uint8Array = new Uint8Array(arrayBuffer)
     const header = new TextDecoder().decode(uint8Array.slice(0, 1024))
     
-    // Basic PDF structure analysis
-    const isEncrypted = header.includes('/Encrypt') || header.includes('/Filter')
+    // Conservative PDF encryption detection
+    // Only flag as encrypted if we find multiple encryption indicators
+    const encryptMatch = header.match(/\/Encrypt\s+\d+\s+\d+\s+R/) // Reference to encryption object
     const hasUserPassword = header.includes('/U ') || header.includes('/UE ')
     const hasOwnerPassword = header.includes('/O ') || header.includes('/OE ')
+    
+    // Only consider encrypted if we have both an encrypt reference AND password fields
+    const isEncrypted = encryptMatch !== null && (hasUserPassword || hasOwnerPassword)
     
     // Estimate page count from PDF structure
     const content = new TextDecoder().decode(uint8Array.slice(0, Math.min(uint8Array.length, 10000)))
