@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { searchSimilarDocuments } from '@/lib/pinecone'
 import { SimilaritySearchResult, SearchFilters } from '@/types'
 import CacheManager, { createCacheHash } from '@/lib/cache'
+import { HybridSearchEngine } from '@/lib/hybrid-search'
 
 export async function POST(
   request: NextRequest,

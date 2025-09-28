@@ -6,6 +6,7 @@ import { detectOptimalProcessor, getProcessorId, getProcessorName } from '@/lib/
 import { batchProcessor } from '@/lib/document-ai-batch'
 import CacheManager from '@/lib/cache'
 import { getGoogleClientOptions } from '@/lib/google-credentials'
+import { SmartRetry, RetryConfigs, circuitBreakers } from '@/lib/retry-logic'
 
 const client = new DocumentProcessorServiceClient(getGoogleClientOptions())
 
@@ -66,8 +67,25 @@ export async function processDocument(documentId: string): Promise<{ switchedToB
 
     let result;
     try {
-      const response = await client.processDocument(request)
-      result = Array.isArray(response) ? response[0] : response
+      // Use smart retry with circuit breaker for Document AI processing
+      const retryResult = await circuitBreakers.documentAI.execute(async () => {
+        return await SmartRetry.execute(
+          async () => {
+            console.log(`🔄 Attempting Document AI processing for ${documentId}`)
+            const response = await client.processDocument(request)
+            return Array.isArray(response) ? response[0] : response
+          },
+          RetryConfigs.documentAI
+        )
+      })
+
+      if (!retryResult.success) {
+        throw retryResult.error
+      }
+
+      result = retryResult.result!
+      console.log(`✅ Document AI processing completed in ${retryResult.attempts} attempts (${retryResult.totalTime}ms)`)
+
     } catch (error: any) {
       // Handle page limit errors by automatically switching to batch processing
       if (error.code === 3 && error.details?.includes('exceed the limit')) {
@@ -355,37 +373,77 @@ export async function generateAndIndexPagedEmbeddings(documentId: string, docume
   const pagedChunks = splitTextIntoPagedChunks(pagesText, 1000) // 1000 character chunks with overlap
   
   for (const pagedChunk of pagedChunks) {
-    // Generate embedding with Vertex AI
-    const embedding = await generateEmbeddings(pagedChunk.text)
+    // Generate embedding with Vertex AI using smart retry
+    const embeddingResult = await circuitBreakers.vertexAI.execute(async () => {
+      return await SmartRetry.execute(
+        async () => {
+          console.log(`🔄 Generating embeddings for chunk ${pagedChunk.chunkIndex}`)
+          return await generateEmbeddings(pagedChunk.text)
+        },
+        RetryConfigs.vertexEmbeddings
+      )
+    })
+
+    if (!embeddingResult.success) {
+      console.error(`❌ Failed to generate embeddings for chunk ${pagedChunk.chunkIndex}:`, embeddingResult.error)
+      throw embeddingResult.error
+    }
+
+    const embedding = embeddingResult.result!
+    console.log(`✅ Embeddings generated for chunk ${pagedChunk.chunkIndex} in ${embeddingResult.attempts} attempts`)
     
     // Create unique vector ID
     const vectorId = `${documentId}_chunk_${pagedChunk.chunkIndex}`
     
-    // Store embedding in Supabase with page number
-    const supabase = createServiceClient()
-    const { error: supabaseError } = await supabase.from('document_embeddings').insert({
-      document_id: documentId,
-      vector_id: vectorId,
-      embedding,
-      chunk_text: pagedChunk.text,
-      chunk_index: pagedChunk.chunkIndex,
-      page_number: pagedChunk.pageNumber,
-    })
+    // Store embedding in Supabase with retry logic
+    const supabaseResult = await SmartRetry.execute(
+      async () => {
+        const supabase = createServiceClient()
+        const { error } = await supabase.from('document_embeddings').insert({
+          document_id: documentId,
+          vector_id: vectorId,
+          embedding,
+          chunk_text: pagedChunk.text,
+          chunk_index: pagedChunk.chunkIndex,
+          page_number: pagedChunk.pageNumber,
+        })
+        
+        if (error) throw error
+        return true
+      },
+      RetryConfigs.supabaseOperations
+    )
     
-    if (supabaseError) {
-      console.error(`Failed to store embedding ${vectorId} in Supabase:`, supabaseError)
-      throw new Error(`Supabase storage failed: ${supabaseError.message}`)
+    if (!supabaseResult.success) {
+      console.error(`❌ Failed to store embedding ${vectorId} in Supabase:`, supabaseResult.error)
+      throw new Error(`Supabase storage failed: ${supabaseResult.error?.message}`)
     }
 
-    // Index in Pinecone with page number and business metadata
-    await indexDocumentInPinecone(vectorId, embedding, {
-      document_id: documentId,
-      chunk_index: pagedChunk.chunkIndex,
-      page_number: pagedChunk.pageNumber,
-      text: pagedChunk.text,
-      // Include business metadata for filtering
-      ...businessMetadata
+    // Index in Pinecone with retry logic and circuit breaker
+    const pineconeResult = await circuitBreakers.pinecone.execute(async () => {
+      return await SmartRetry.execute(
+        async () => {
+          console.log(`🔄 Indexing vector ${vectorId} in Pinecone`)
+          await indexDocumentInPinecone(vectorId, embedding, {
+            document_id: documentId,
+            chunk_index: pagedChunk.chunkIndex,
+            page_number: pagedChunk.pageNumber,
+            text: pagedChunk.text,
+            // Include business metadata for filtering
+            ...businessMetadata
+          })
+          return true
+        },
+        RetryConfigs.pineconeIndexing
+      )
     })
+
+    if (!pineconeResult.success) {
+      console.error(`❌ Failed to index vector ${vectorId} in Pinecone:`, pineconeResult.error)
+      throw new Error(`Pinecone indexing failed: ${pineconeResult.error?.message}`)
+    }
+
+    console.log(`✅ Vector ${vectorId} indexed successfully in Pinecone`)
   }
 }
 
