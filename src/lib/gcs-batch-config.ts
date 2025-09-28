@@ -88,6 +88,30 @@ export class GCSBatchManager {
     return `gs://${GCS_CONFIG.BUCKET_NAME}/${GCS_CONFIG.BATCH_OUTPUT_PREFIX}${documentId}/`
   }
 
+  async checkBatchOutputExists(documentId: string): Promise<boolean> {
+    try {
+      const outputPrefix = `${GCS_CONFIG.BATCH_OUTPUT_PREFIX}${documentId}/`
+      const [files] = await this.bucket.getFiles({
+        prefix: outputPrefix,
+        maxResults: 1,
+      })
+
+      // Check if any JSON output files exist
+      const hasResults = files.some(file => file.name.endsWith('.json'))
+      
+      if (hasResults) {
+        console.log(`Batch output exists for document: ${documentId}`)
+      } else {
+        console.log(`No batch output found for document: ${documentId}`)
+      }
+      
+      return hasResults
+    } catch (error) {
+      console.error('Error checking batch output existence:', error)
+      return false
+    }
+  }
+
   async checkBucketAccess(): Promise<boolean> {
     try {
       const [exists] = await this.bucket.exists()

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import CacheManager, { createCacheHash } from '@/lib/cache'
 
 export async function GET(request: NextRequest) {
   try {
@@ -16,6 +17,19 @@ export async function GET(request: NextRequest) {
     const offset = parseInt(searchParams.get('offset') || '0')
     const status = searchParams.get('status')
     const search = searchParams.get('search')
+
+    // Create cache key for this specific query
+    const queryParams = { userId: user.id, limit, offset, status, search }
+    const cacheKey = createCacheHash(queryParams)
+    
+    // Try to get from cache first (only for non-search queries and first page)
+    if (!search && offset === 0 && limit <= 50) {
+      const cachedDocuments = await CacheManager.getDashboardData(user.id)
+      if (cachedDocuments && cachedDocuments.documents) {
+        console.log(`🚀 Cache hit for documents list: ${user.id}`)
+        return NextResponse.json(cachedDocuments.documents.slice(0, limit))
+      }
+    }
 
     let query = supabase
       .from('documents')
@@ -37,6 +51,13 @@ export async function GET(request: NextRequest) {
     if (dbError) {
       console.error('Database error:', dbError)
       return NextResponse.json({ error: 'Failed to fetch documents' }, { status: 500 })
+    }
+
+    // Cache the results for basic queries (no search, first page)
+    if (!search && offset === 0 && limit <= 50 && documents) {
+      const dashboardData = { documents, cached_at: new Date().toISOString() }
+      await CacheManager.setDashboardData(user.id, dashboardData)
+      console.log(`💾 Cached documents list for user: ${user.id}`)
     }
 
     return NextResponse.json(documents)

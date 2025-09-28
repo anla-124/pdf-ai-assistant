@@ -1,8 +1,14 @@
 -- =====================================================
--- PDF AI Assistant - Complete Database Setup Script
+-- PDF AI Assistant - Complete Database Schema
 -- =====================================================
--- This script sets up the entire database schema for the PDF AI Assistant
--- Run this once in your Supabase SQL Editor to initialize the database
+-- This is the CONSOLIDATED database setup script that includes:
+-- ✅ Core database schema (from database-setup.sql)
+-- ✅ Page tracking functionality (from database-page-migration.sql)
+-- ✅ Page count tracking (from database-page-count-migration.sql)
+-- ✅ Batch processing support (from database-batch-update.sql)
+-- 
+-- Run this ONCE in your Supabase SQL Editor to set up the complete database
+-- This replaces all individual migration scripts
 -- =====================================================
 
 -- Enable required extensions
@@ -26,7 +32,7 @@ CREATE TABLE IF NOT EXISTS public.users (
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- Create documents table
+-- Create documents table with page_count support
 CREATE TABLE IF NOT EXISTS public.documents (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -37,19 +43,25 @@ CREATE TABLE IF NOT EXISTS public.documents (
   content_type TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'uploading' CHECK (status IN ('uploading', 'queued', 'processing', 'completed', 'error')),
   processing_error TEXT,
+  processing_notes TEXT, -- Additional notes about processing (batch operations, etc.)
   extracted_text TEXT,
   extracted_fields JSONB,
   metadata JSONB,
+  page_count INTEGER, -- Total number of pages in the PDF
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+-- Add comment for page_count column
+COMMENT ON COLUMN public.documents.page_count IS 'Total number of pages in the PDF document, extracted during processing';
+COMMENT ON COLUMN public.documents.processing_notes IS 'Additional processing information (batch operations, errors, etc.)';
 
 -- Create extracted_fields table
 CREATE TABLE IF NOT EXISTS public.extracted_fields (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   field_name TEXT NOT NULL,
-  field_value JSONB, -- Changed from TEXT to JSONB to handle string|number|boolean types
+  field_value JSONB, -- JSONB to handle string|number|boolean types
   field_type TEXT NOT NULL CHECK (field_type IN ('text', 'number', 'date', 'checkbox', 'select')),
   confidence DECIMAL(5,4),
   page_number INTEGER,
@@ -57,7 +69,7 @@ CREATE TABLE IF NOT EXISTS public.extracted_fields (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- Create document_embeddings table with CORRECT vector dimensions for Vertex AI
+-- Create document_embeddings table with page tracking support
 CREATE TABLE IF NOT EXISTS public.document_embeddings (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -65,6 +77,7 @@ CREATE TABLE IF NOT EXISTS public.document_embeddings (
   embedding VECTOR(768), -- Vertex AI embedding dimension (768, NOT 1536)
   chunk_text TEXT NOT NULL,
   chunk_index INTEGER NOT NULL,
+  page_number INTEGER, -- Track which PDF page this chunk originated from
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
@@ -80,7 +93,7 @@ CREATE TABLE IF NOT EXISTS public.processing_status (
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- Create document_jobs table for job queue management
+-- Create document_jobs table with batch processing support
 CREATE TABLE IF NOT EXISTS public.document_jobs (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -93,9 +106,18 @@ CREATE TABLE IF NOT EXISTS public.document_jobs (
   error_message TEXT,
   started_at TIMESTAMP WITH TIME ZONE,
   completed_at TIMESTAMP WITH TIME ZONE,
+  -- Batch processing support columns
+  batch_operation_id TEXT, -- Google Cloud Document AI batch operation ID
+  processing_method TEXT DEFAULT 'sync' CHECK (processing_method IN ('sync', 'batch')), -- Processing method
+  metadata JSONB DEFAULT '{}'::jsonb, -- Additional batch processing metadata
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+-- Add comments for batch processing columns
+COMMENT ON COLUMN public.document_jobs.batch_operation_id IS 'Google Cloud Document AI batch operation ID for tracking long-running operations';
+COMMENT ON COLUMN public.document_jobs.processing_method IS 'Processing method: sync for ≤30 pages, batch for >30 pages';
+COMMENT ON COLUMN public.document_jobs.metadata IS 'Additional batch processing metadata (GCS URIs, processor info, etc.)';
 
 -- =====================================================
 -- INDEXES FOR PERFORMANCE
@@ -115,12 +137,20 @@ CREATE INDEX IF NOT EXISTS idx_processing_status_status ON processing_status(sta
 CREATE INDEX IF NOT EXISTS idx_document_embeddings_chunk_index ON document_embeddings(chunk_index);
 CREATE INDEX IF NOT EXISTS idx_documents_status_user_id ON documents(status, user_id);
 
+-- Page tracking indexes (from page migration)
+CREATE INDEX IF NOT EXISTS idx_document_embeddings_page_number ON document_embeddings(page_number);
+CREATE INDEX IF NOT EXISTS idx_document_embeddings_doc_page ON document_embeddings(document_id, page_number);
+
 -- Job queue indexes for performance
 CREATE INDEX IF NOT EXISTS idx_document_jobs_status ON document_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_document_jobs_created_at ON document_jobs(created_at);
 CREATE INDEX IF NOT EXISTS idx_document_jobs_user_id ON document_jobs(user_id);
 CREATE INDEX IF NOT EXISTS idx_document_jobs_document_id ON document_jobs(document_id);
 CREATE INDEX IF NOT EXISTS idx_document_jobs_status_priority ON document_jobs(status, priority DESC, created_at);
+
+-- Batch processing indexes (from batch update)
+CREATE INDEX IF NOT EXISTS idx_document_jobs_batch_operation_id ON document_jobs(batch_operation_id);
+CREATE INDEX IF NOT EXISTS idx_document_jobs_processing_method ON document_jobs(processing_method);
 
 -- GIN indexes for JSONB fields (for fast JSON queries)
 CREATE INDEX IF NOT EXISTS idx_documents_metadata_gin ON documents USING GIN(metadata);
@@ -251,7 +281,7 @@ CREATE POLICY "Users can update processing status of own documents" ON processin
     )
   );
 
--- Document jobs policies
+-- Document jobs policies (including batch processing support)
 DROP POLICY IF EXISTS "Users can view own document jobs" ON document_jobs;
 CREATE POLICY "Users can view own document jobs" ON document_jobs
   FOR SELECT USING (auth.uid() = user_id);
@@ -264,6 +294,7 @@ DROP POLICY IF EXISTS "Users can update own document jobs" ON document_jobs;
 CREATE POLICY "Users can update own document jobs" ON document_jobs
   FOR UPDATE USING (auth.uid() = user_id);
 
+-- Service role policy for batch processing operations
 DROP POLICY IF EXISTS "System can manage all document jobs" ON document_jobs;
 CREATE POLICY "System can manage all document jobs" ON document_jobs
   FOR ALL USING (current_setting('request.jwt.claims', true)::json->>'role' = 'service_role');
@@ -358,6 +389,18 @@ CREATE POLICY "Users can delete own documents" ON storage.objects
   );
 
 -- =====================================================
+-- CLEANUP & OPTIMIZATION
+-- =====================================================
+
+-- Update table statistics for better query planning
+ANALYZE public.users;
+ANALYZE public.documents;
+ANALYZE public.extracted_fields;
+ANALYZE public.document_embeddings;
+ANALYZE public.processing_status;
+ANALYZE public.document_jobs;
+
+-- =====================================================
 -- SETUP COMPLETE
 -- =====================================================
 
@@ -365,18 +408,42 @@ CREATE POLICY "Users can delete own documents" ON storage.objects
 DO $$
 BEGIN
   RAISE NOTICE '============================================';
-  RAISE NOTICE 'PDF AI Assistant Database Setup Complete!';
+  RAISE NOTICE 'PDF AI Assistant - Complete Database Setup!';
   RAISE NOTICE '============================================';
-  RAISE NOTICE 'Tables created: users, documents, extracted_fields, document_embeddings, processing_status, document_jobs';
-  RAISE NOTICE 'Indexes created: Performance optimized indexes for all tables';
-  RAISE NOTICE 'RLS enabled: Row-level security policies applied';
-  RAISE NOTICE 'Storage bucket: "documents" bucket created for PDF files';
-  RAISE NOTICE 'Vector dimensions: 768 (configured for Vertex AI embeddings)';
+  RAISE NOTICE 'TABLES CREATED:';
+  RAISE NOTICE '✅ users - User profiles and authentication';
+  RAISE NOTICE '✅ documents - PDF documents with page_count support';
+  RAISE NOTICE '✅ extracted_fields - Document AI extracted data';
+  RAISE NOTICE '✅ document_embeddings - Vector embeddings with page tracking';
+  RAISE NOTICE '✅ processing_status - Real-time processing status';
+  RAISE NOTICE '✅ document_jobs - Job queue with batch processing support';
   RAISE NOTICE '';
-  RAISE NOTICE 'Next steps:';
-  RAISE NOTICE '1. Configure your environment variables (.env.local)';
+  RAISE NOTICE 'FEATURES INCLUDED:';
+  RAISE NOTICE '✅ Page tracking for embeddings (similarity search by page)';
+  RAISE NOTICE '✅ Page count tracking for documents';
+  RAISE NOTICE '✅ Batch processing support for large documents (>30 pages)';
+  RAISE NOTICE '✅ Business metadata filtering ready';
+  RAISE NOTICE '✅ Row-level security (RLS) policies';
+  RAISE NOTICE '✅ Performance optimized indexes';
+  RAISE NOTICE '✅ Storage bucket for PDF files';
+  RAISE NOTICE '✅ Vector dimensions: 768 (Vertex AI compatible)';
+  RAISE NOTICE '';
+  RAISE NOTICE 'BATCH PROCESSING READY:';
+  RAISE NOTICE '• batch_operation_id: Track Google Cloud operations';
+  RAISE NOTICE '• processing_method: sync vs batch processing';
+  RAISE NOTICE '• metadata: Store batch operation details';
+  RAISE NOTICE '';
+  RAISE NOTICE 'NEXT STEPS:';
+  RAISE NOTICE '1. Configure environment variables (.env.local)';
   RAISE NOTICE '2. Set up Google Document AI credentials';
   RAISE NOTICE '3. Configure Vertex AI and Pinecone';
-  RAISE NOTICE '4. Enable Google OAuth in Supabase Auth settings';
+  RAISE NOTICE '4. Set up Google Cloud Storage bucket for batch processing';
+  RAISE NOTICE '5. Enable Google OAuth in Supabase Auth settings';
+  RAISE NOTICE '';
+  RAISE NOTICE 'This script replaces ALL previous migration scripts:';
+  RAISE NOTICE '• database-setup.sql ✅';
+  RAISE NOTICE '• database-page-migration.sql ✅';
+  RAISE NOTICE '• database-page-count-migration.sql ✅';
+  RAISE NOTICE '• database-batch-update.sql ✅';
   RAISE NOTICE '============================================';
 END $$;

@@ -4,6 +4,7 @@ import { DashboardLayout } from '@/components/dashboard/layout'
 import { DocumentUpload } from '@/components/dashboard/document-upload'
 import { EnhancedDocumentList } from '@/components/dashboard/enhanced-document-list'
 import { JobProcessorTest } from '@/components/dev/job-processor-test'
+import { BatchProcessingMonitor } from '@/components/admin/batch-processing-monitor'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -31,6 +32,9 @@ export default async function DashboardPage() {
 
         {/* Development: Job Processor Test */}
         <JobProcessorTest />
+
+        {/* Batch Processing Monitor */}
+        <BatchProcessingMonitor />
 
         {/* Upload Section */}
         <DocumentUpload />

@@ -20,6 +20,7 @@ export interface Document {
   extracted_text?: string
   extracted_fields?: Record<string, any>
   metadata?: DocumentMetadata
+  page_count?: number
   created_at: string
   updated_at: string
 }
@@ -32,6 +33,11 @@ export interface DocumentMetadata {
     end_date?: string
   }
   tags?: string[]
+  // Business metadata fields
+  law_firm?: 'STB' | 'Proskauer' | 'N/A' | ''
+  fund_manager?: 'Blackstone' | 'KKR' | 'N/A' | ''
+  fund_admin?: 'Standish' | 'CITCO' | 'N/A' | ''
+  jurisdiction?: 'Delaware' | 'Cayman Islands' | 'N/A' | ''
   custom_fields?: Record<string, any>
   embeddings_skipped?: boolean
   embeddings_error?: string
@@ -61,6 +67,7 @@ export interface DocumentEmbedding {
   embedding: number[]
   chunk_text: string
   chunk_index: number
+  page_number?: number
   created_at: string
 }
 
@@ -81,7 +88,17 @@ export interface SearchFilters {
     end_date?: string
   }
   tags?: string[]
+  // Business metadata filters
+  law_firm?: ('STB' | 'Proskauer' | 'N/A')[]
+  fund_manager?: ('Blackstone' | 'KKR' | 'N/A')[]
+  fund_admin?: ('Standish' | 'CITCO' | 'N/A')[]
+  jurisdiction?: ('Delaware' | 'Cayman Islands' | 'N/A')[]
   min_score?: number
+  page_range?: {
+    start_page?: number
+    end_page?: number
+    use_entire_document?: boolean
+  }
 }
 
 export interface ProcessingStatus {

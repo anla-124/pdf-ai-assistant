@@ -108,3 +108,64 @@ export async function DELETE(
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+    const supabase = await createClient()
+    
+    // Check authentication
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const body = await request.json()
+    const { metadata } = body
+
+    if (!metadata) {
+      return NextResponse.json({ error: 'Metadata is required' }, { status: 400 })
+    }
+
+    // Verify the document exists and belongs to the user
+    const { data: existingDocument, error: fetchError } = await supabase
+      .from('documents')
+      .select('*')
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .single()
+
+    if (fetchError) {
+      if (fetchError.code === 'PGRST116') {
+        return NextResponse.json({ error: 'Document not found' }, { status: 404 })
+      }
+      return NextResponse.json({ error: 'Failed to fetch document' }, { status: 500 })
+    }
+
+    // Update the document metadata
+    const { data: updatedDocument, error: updateError } = await supabase
+      .from('documents')
+      .update({
+        metadata: metadata,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .select()
+      .single()
+
+    if (updateError) {
+      console.error('Database update error:', updateError)
+      return NextResponse.json({ error: 'Failed to update document' }, { status: 500 })
+    }
+
+    return NextResponse.json(updatedDocument)
+
+  } catch (error) {
+    console.error('Document update error:', error)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}

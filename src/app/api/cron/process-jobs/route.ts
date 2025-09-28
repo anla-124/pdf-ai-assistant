@@ -3,17 +3,13 @@ import { createClient } from '@supabase/supabase-js'
 import { processDocument } from '@/lib/document-processing'
 import { batchProcessor } from '@/lib/document-ai-batch'
 
-// Helper function to determine if document needs batch processing
+// Always try sync processing first - no estimation needed
 function needsBatchProcessing(fileSize: number, filename: string): boolean {
-  // Estimate page count based on file size (rough estimate: 50KB per page for PDFs)
-  const estimatedPages = Math.ceil(fileSize / (50 * 1024))
+  // Always try sync first - let Document AI tell us if it's too large
+  const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(1)
+  console.log(`Document ${filename}: ${fileSize} bytes (${fileSizeMB}MB) - trying sync processing first`)
   
-  // Use batch processing for documents likely >30 pages or files >2MB
-  const needsBatch = estimatedPages > 30 || fileSize > 2 * 1024 * 1024
-  
-  console.log(`Document ${filename}: ${fileSize} bytes, ~${estimatedPages} pages, batch: ${needsBatch}`)
-  
-  return needsBatch
+  return false // Always start with sync
 }
 
 export async function GET(request: NextRequest) {
@@ -91,6 +87,7 @@ export async function GET(request: NextRequest) {
 
     const job = jobs[0]
     console.log(`Processing job ${job.id} for document ${job.document_id} (status: ${job.status})`)
+    console.log(`Job documents:`, job.documents)
 
     // Only update to processing if job is queued (not already processing)
     if (job.status === 'queued') {
@@ -123,10 +120,22 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-      const document = job.documents?.[0]
+      // Try to get document from join, fallback to separate query if needed
+      let document = job.documents?.[0]
       
       if (!document) {
-        throw new Error('Document not found')
+        console.log(`Document not found in join for job ${job.id}, fetching separately...`)
+        const { data: docData, error: docError } = await supabase
+          .from('documents')
+          .select('id, title, filename, file_path, file_size, user_id')
+          .eq('id', job.document_id)
+          .single()
+        
+        if (docError || !docData) {
+          throw new Error(`Document ${job.document_id} not found: ${docError?.message || 'Unknown error'}`)
+        }
+        
+        document = docData
       }
 
       // Determine processing method if not already set
@@ -244,24 +253,45 @@ export async function GET(request: NextRequest) {
         }
       } else {
         // Handle synchronous processing (existing logic)
-        await processDocument(job.document_id)
+        const result = await processDocument(job.document_id)
 
-        // Mark job as completed
-        await supabase
-          .from('document_jobs')
-          .update({ 
-            status: 'completed',
-            completed_at: new Date().toISOString()
+        if (result && result.switchedToBatch) {
+          // Document processor switched to batch processing
+          console.log(`Document ${job.document_id} switched to batch processing`)
+          
+          // Update job to batch processing method
+          await supabase
+            .from('document_jobs')
+            .update({ 
+              processing_method: 'batch',
+              status: 'processing' // Keep as processing for batch
+            })
+            .eq('id', job.id)
+          
+          return NextResponse.json({ 
+            message: 'Document switched to batch processing',
+            jobId: job.id,
+            documentId: job.document_id,
+            switchedToBatch: true
           })
-          .eq('id', job.id)
+        } else {
+          // Normal sync processing completed
+          await supabase
+            .from('document_jobs')
+            .update({ 
+              status: 'completed',
+              completed_at: new Date().toISOString()
+            })
+            .eq('id', job.id)
 
-        console.log(`Successfully processed job ${job.id} (sync)`)
-        
-        return NextResponse.json({ 
-          message: 'Document processed successfully (sync)',
-          jobId: job.id,
-          documentId: job.document_id
-        })
+          console.log(`Successfully processed job ${job.id} (sync)`)
+          
+          return NextResponse.json({ 
+            message: 'Document processed successfully (sync)',
+            jobId: job.id,
+            documentId: job.document_id
+          })
+        }
       }
 
     } catch (processingError) {

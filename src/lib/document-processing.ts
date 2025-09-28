@@ -3,13 +3,15 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { generateEmbeddings } from '@/lib/embeddings-vertex'
 import { indexDocumentInPinecone } from '@/lib/pinecone'
 import { detectOptimalProcessor, getProcessorId, getProcessorName } from '@/lib/document-ai-config'
+import { batchProcessor } from '@/lib/document-ai-batch'
+import CacheManager from '@/lib/cache'
 
 const client = new DocumentProcessorServiceClient({
   projectId: process.env.GOOGLE_CLOUD_PROJECT_ID!,
   keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS,
 })
 
-export async function processDocument(documentId: string): Promise<void> {
+export async function processDocument(documentId: string): Promise<{ switchedToBatch?: boolean }> {
   const supabase = createServiceClient()
   
   try {
@@ -46,13 +48,15 @@ export async function processDocument(documentId: string): Promise<void> {
     // Update processing status
     await updateProcessingStatus(documentId, 'processing', 40, 'Processing with Document AI...')
 
-    // Process with Google Document AI
+    // Always try sync processing first - let Document AI tell us if it's too large
+    const fileSizeMB = document.file_size / (1024 * 1024)
+    console.log(`Processing document (${fileSizeMB.toFixed(1)}MB) - trying sync processing first`)
+
+    // Process with Google Document AI (synchronous for smaller documents)
     // Auto-detect optimal processor or use default
     const optimalProcessor = detectOptimalProcessor(document.filename, document.file_size)
     const processorId = getProcessorId(optimalProcessor)
     const name = getProcessorName(processorId)
-    
-    console.log(`Processing document with ${optimalProcessor} processor:`, name)
     
     const request = {
       name,
@@ -67,11 +71,16 @@ export async function processDocument(documentId: string): Promise<void> {
       const response = await client.processDocument(request)
       result = Array.isArray(response) ? response[0] : response
     } catch (error: any) {
-      // Handle page limit errors with helpful message
-      if (error.code === 3 && error.details?.includes('pages exceed the limit')) {
-        const errorMessage = `Document processing failed: ${error.details}. This document exceeds the 30-page limit for synchronous processing. For documents larger than 30 pages, you'll need to implement asynchronous batch processing in Google Cloud Document AI.`
-        console.error('Page limit error:', errorMessage)
-        throw new Error(errorMessage)
+      // Handle page limit errors by automatically switching to batch processing
+      if (error.code === 3 && error.details?.includes('exceed the limit')) {
+        console.log('Page limit exceeded for synchronous processing, switching to batch processing...')
+        try {
+          await processBatchDocument(documentId)
+          return { switchedToBatch: true } // Indicate successful switch to batch
+        } catch (batchError) {
+          console.error('Failed to switch to batch processing:', batchError)
+          throw batchError // If batch switch fails, throw the batch error
+        }
       }
       // Re-throw other errors
       throw error
@@ -87,6 +96,9 @@ export async function processDocument(documentId: string): Promise<void> {
     // Extract text and structured fields
     const extractedText = result.document.text || ''
     const extractedFields = extractStructuredFields(result.document)
+    
+    // Extract page count from document
+    const pageCount = result.document.pages ? result.document.pages.length : 0
 
     // Update document with extracted data
     const { error: updateError } = await supabase
@@ -94,6 +106,7 @@ export async function processDocument(documentId: string): Promise<void> {
       .update({
         extracted_text: extractedText,
         extracted_fields: extractedFields,
+        page_count: pageCount,
         status: 'processing', // Keep processing until embeddings are complete
       })
       .eq('id', documentId)
@@ -120,9 +133,9 @@ export async function processDocument(documentId: string): Promise<void> {
     // Update processing status
     await updateProcessingStatus(documentId, 'processing', 80, 'Generating embeddings...')
 
-    // Generate embeddings and index in Pinecone (with fallback)
+    // Generate embeddings and index in Pinecone with page tracking
     try {
-      await generateAndIndexEmbeddings(documentId, extractedText)
+      await generateAndIndexPagedEmbeddings(documentId, result.document)
       await updateProcessingStatus(documentId, 'completed', 100, 'Document processing completed successfully')
     } catch (embeddingError) {
       console.error('Embedding generation failed, completing without embeddings:', embeddingError)
@@ -146,6 +159,11 @@ export async function processDocument(documentId: string): Promise<void> {
       .from('documents')
       .update({ status: 'completed' })
       .eq('id', documentId)
+    
+    // Invalidate caches when document processing completes
+    await invalidateDocumentCaches(documentId, document.user_id)
+    
+    return {} // Successful sync processing
 
   } catch (error) {
     console.error('Document processing error:', error)
@@ -166,6 +184,9 @@ export async function processDocument(documentId: string): Promise<void> {
       'Processing failed',
       error instanceof Error ? error.message : 'Unknown error'
     )
+    
+    // Re-throw the error so job processor can handle it
+    throw error
   }
 }
 
@@ -313,7 +334,79 @@ function extractTableData(documentText: string, table: any): any[] {
   return tableData
 }
 
+// Generate embeddings with page tracking (new version)
+export async function generateAndIndexPagedEmbeddings(documentId: string, document: any): Promise<void> {
+  // Get document metadata for Pinecone indexing
+  const supabase = createServiceClient()
+  const { data: docRecord, error: docError } = await supabase
+    .from('documents')
+    .select('metadata')
+    .eq('id', documentId)
+    .single()
+
+  if (docError) {
+    console.warn(`Could not fetch document metadata for ${documentId}:`, docError)
+  }
+
+  const businessMetadata = docRecord?.metadata || {}
+
+  // Extract text by pages to preserve page information
+  const pagesText = extractTextByPages(document)
+  
+  // Split into chunks while preserving page numbers
+  const pagedChunks = splitTextIntoPagedChunks(pagesText, 1000) // 1000 character chunks with overlap
+  
+  for (const pagedChunk of pagedChunks) {
+    // Generate embedding with Vertex AI
+    const embedding = await generateEmbeddings(pagedChunk.text)
+    
+    // Create unique vector ID
+    const vectorId = `${documentId}_chunk_${pagedChunk.chunkIndex}`
+    
+    // Store embedding in Supabase with page number
+    const supabase = createServiceClient()
+    const { error: supabaseError } = await supabase.from('document_embeddings').insert({
+      document_id: documentId,
+      vector_id: vectorId,
+      embedding,
+      chunk_text: pagedChunk.text,
+      chunk_index: pagedChunk.chunkIndex,
+      page_number: pagedChunk.pageNumber,
+    })
+    
+    if (supabaseError) {
+      console.error(`Failed to store embedding ${vectorId} in Supabase:`, supabaseError)
+      throw new Error(`Supabase storage failed: ${supabaseError.message}`)
+    }
+
+    // Index in Pinecone with page number and business metadata
+    await indexDocumentInPinecone(vectorId, embedding, {
+      document_id: documentId,
+      chunk_index: pagedChunk.chunkIndex,
+      page_number: pagedChunk.pageNumber,
+      text: pagedChunk.text,
+      // Include business metadata for filtering
+      ...businessMetadata
+    })
+  }
+}
+
+// Legacy function for backward compatibility  
 export async function generateAndIndexEmbeddings(documentId: string, text: string): Promise<void> {
+  // Get document metadata for Pinecone indexing
+  const supabase = createServiceClient()
+  const { data: docRecord, error: docError } = await supabase
+    .from('documents')
+    .select('metadata')
+    .eq('id', documentId)
+    .single()
+
+  if (docError) {
+    console.warn(`Could not fetch document metadata for ${documentId}:`, docError)
+  }
+
+  const businessMetadata = docRecord?.metadata || {}
+
   // Split text into chunks for embedding
   const chunks = splitTextIntoChunks(text, 1000) // 1000 character chunks with overlap
   
@@ -326,7 +419,7 @@ export async function generateAndIndexEmbeddings(documentId: string, text: strin
     // Create unique vector ID
     const vectorId = `${documentId}_chunk_${i}`
     
-    // Store embedding in Supabase
+    // Store embedding in Supabase (without page tracking for legacy)
     const supabase = createServiceClient()
     const { error: supabaseError } = await supabase.from('document_embeddings').insert({
       document_id: documentId,
@@ -334,6 +427,7 @@ export async function generateAndIndexEmbeddings(documentId: string, text: strin
       embedding,
       chunk_text: chunk,
       chunk_index: i,
+      page_number: null, // Legacy documents don't have page tracking
     })
     
     if (supabaseError) {
@@ -341,15 +435,97 @@ export async function generateAndIndexEmbeddings(documentId: string, text: strin
       throw new Error(`Supabase storage failed: ${supabaseError.message}`)
     }
     
-    console.log(`Stored embedding ${vectorId} in Supabase database`)
-    
-    // Index in Pinecone
+    // Index in Pinecone with business metadata
     await indexDocumentInPinecone(vectorId, embedding, {
       document_id: documentId,
       chunk_index: i,
       text: chunk,
+      // Include business metadata for filtering
+      ...businessMetadata
     })
   }
+}
+
+// Interface for text chunks with page information
+interface PagedChunk {
+  text: string
+  chunkIndex: number
+  pageNumber: number
+}
+
+// Extract text page by page from Document AI result
+function extractTextByPages(document: any): { text: string; pageNumber: number }[] {
+  const pagesText: { text: string; pageNumber: number }[] = []
+  
+  if (document.pages) {
+    for (const page of document.pages) {
+      const pageNumber = page.pageNumber || 1
+      
+      // Extract text for this specific page using text anchors
+      let pageText = ''
+      
+      if (page.paragraphs) {
+        for (const paragraph of page.paragraphs) {
+          if (paragraph.layout?.textAnchor) {
+            const paragraphText = getTextFromTextAnchor(document.text, paragraph.layout.textAnchor)
+            if (paragraphText) {
+              pageText += paragraphText + '\n'
+            }
+          }
+        }
+      }
+      
+      // Fallback: if no paragraphs, try to extract from lines
+      if (!pageText && page.lines) {
+        for (const line of page.lines) {
+          if (line.layout?.textAnchor) {
+            const lineText = getTextFromTextAnchor(document.text, line.layout.textAnchor)
+            if (lineText) {
+              pageText += lineText + '\n'
+            }
+          }
+        }
+      }
+      
+      if (pageText.trim()) {
+        pagesText.push({
+          text: pageText.trim(),
+          pageNumber: pageNumber
+        })
+      }
+    }
+  }
+  
+  // Fallback: if no pages structure, treat entire text as page 1
+  if (pagesText.length === 0 && document.text) {
+    pagesText.push({
+      text: document.text,
+      pageNumber: 1
+    })
+  }
+  
+  return pagesText
+}
+
+// Split text into chunks while preserving page information
+function splitTextIntoPagedChunks(pagesText: { text: string; pageNumber: number }[], chunkSize: number, overlap: number = 200): PagedChunk[] {
+  const pagedChunks: PagedChunk[] = []
+  let globalChunkIndex = 0
+  
+  for (const pageInfo of pagesText) {
+    const pageChunks = splitTextIntoChunks(pageInfo.text, chunkSize, overlap)
+    
+    for (const chunkText of pageChunks) {
+      pagedChunks.push({
+        text: chunkText,
+        chunkIndex: globalChunkIndex,
+        pageNumber: pageInfo.pageNumber
+      })
+      globalChunkIndex++
+    }
+  }
+  
+  return pagedChunks
 }
 
 export function splitTextIntoChunks(text: string, chunkSize: number, overlap: number = 200): string[] {
@@ -376,4 +552,78 @@ export function splitTextIntoChunks(text: string, chunkSize: number, overlap: nu
   }
   
   return chunks.filter(chunk => chunk.trim().length > 0)
+}
+
+/**
+ * Process large documents using Google Cloud Document AI batch processing
+ */
+async function processBatchDocument(documentId: string): Promise<void> {
+  const supabase = createServiceClient()
+  
+  try {
+    console.log(`Starting batch processing for document: ${documentId}`)
+    
+    // Update processing status
+    await updateProcessingStatus(documentId, 'processing', 50, 'Uploading to Google Cloud Storage for batch processing...')
+    
+    // Start batch processing operation
+    const operationId = await batchProcessor.startBatchProcessing(documentId)
+    
+    // Update processing status
+    await updateProcessingStatus(documentId, 'processing', 60, 'Document sent for batch processing. This may take several minutes...')
+    
+    // Update document status to indicate batch processing
+    await supabase
+      .from('documents')
+      .update({ 
+        status: 'processing',
+        processing_notes: `Batch processing started. Operation ID: ${operationId.substring(0, 20)}...`
+      })
+      .eq('id', documentId)
+    
+  } catch (error) {
+    console.error('Batch processing initiation failed:', error)
+    
+    // Update document and processing status with error
+    await supabase
+      .from('documents')
+      .update({
+        status: 'error',
+        processing_error: error instanceof Error ? error.message : 'Batch processing initiation failed'
+      })
+      .eq('id', documentId)
+
+    await updateProcessingStatus(
+      documentId, 
+      'error', 
+      0, 
+      'Batch processing failed to start',
+      error instanceof Error ? error.message : 'Unknown error'
+    )
+    
+    throw error
+  }
+}
+
+/**
+ * Invalidate relevant caches when document status changes
+ */
+async function invalidateDocumentCaches(documentId: string, userId: string): Promise<void> {
+  try {
+    console.log(`♻️ Invalidating caches for document ${documentId}`)
+    
+    // Invalidate document-specific caches
+    await CacheManager.invalidateDocument(documentId)
+    
+    // Invalidate user dashboard data
+    await CacheManager.invalidateDashboardData(userId)
+    
+    // Invalidate any similarity search results involving this document
+    await CacheManager.invalidatePattern(`similar:*`)
+    
+    console.log(`✅ Cache invalidation completed for document ${documentId}`)
+  } catch (error) {
+    console.warn(`⚠️ Cache invalidation failed for document ${documentId}:`, error)
+    // Don't throw error - cache invalidation failure shouldn't stop document processing
+  }
 }

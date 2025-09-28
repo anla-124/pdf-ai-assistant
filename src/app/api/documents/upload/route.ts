@@ -13,9 +13,21 @@ export async function POST(request: NextRequest) {
 
     const formData = await request.formData()
     const file = formData.get('file') as File
+    const metadataString = formData.get('metadata') as string
     
     if (!file) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+    }
+
+    // Parse metadata if provided
+    let metadata = {}
+    if (metadataString) {
+      try {
+        metadata = JSON.parse(metadataString)
+      } catch (error) {
+        console.error('Invalid metadata format:', error)
+        return NextResponse.json({ error: 'Invalid metadata format' }, { status: 400 })
+      }
     }
 
     if (file.type !== 'application/pdf') {
@@ -55,6 +67,7 @@ export async function POST(request: NextRequest) {
         file_size: file.size,
         content_type: file.type,
         status: 'uploading', // Will be changed to 'queued' after job creation
+        metadata: metadata,
       })
       .select()
       .single()

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -28,9 +28,28 @@ const navigation: NavigationItem[] = [
 
 export function Sidebar() {
   const [isLoading, setIsLoading] = useState(false)
+  const [isDark, setIsDark] = useState(false)
   const pathname = usePathname()
   const router = useRouter()
   const supabase = createClient()
+
+  useEffect(() => {
+    // Check if dark mode is active
+    const checkDarkMode = () => {
+      setIsDark(document.documentElement.classList.contains('dark'))
+    }
+    
+    checkDarkMode()
+    
+    // Watch for theme changes
+    const observer = new MutationObserver(checkDarkMode)
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class']
+    })
+    
+    return () => observer.disconnect()
+  }, [])
 
   const handleLogout = async () => {
     setIsLoading(true)
@@ -45,9 +64,16 @@ export function Sidebar() {
   }
 
   return (
-    <div className="flex h-full w-64 flex-col bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700">
+    <div 
+      className={`flex h-full w-64 flex-col border-r border-gray-200 dark:border-slate-700/50 sidebar-enhanced backdrop-blur-xl ${
+        isDark ? '' : 'bg-white'
+      }`}
+      style={{
+        backgroundColor: isDark ? '#0a1329' : undefined
+      }}
+    >
       {/* Logo */}
-      <div className="flex h-16 items-center px-6 border-b border-gray-200 dark:border-gray-700">
+      <div className="flex h-16 items-center px-6 border-b border-gray-200 dark:border-slate-700/50">
         <Link href="/dashboard" className="flex items-center space-x-3">
           <div className="flex h-10 w-10 items-center justify-center">
             <Image 
@@ -93,7 +119,9 @@ export function Sidebar() {
         })}
       </nav>
 
-      <Separator className="mx-3" />
+      <div className="px-3">
+        <Separator />
+      </div>
 
       {/* User section */}
       <div className="p-3 space-y-2">

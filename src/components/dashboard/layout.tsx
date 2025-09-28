@@ -12,7 +12,7 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
-    <div className="flex h-screen bg-gray-50 dark:bg-gray-950">
+    <div className="flex h-screen bg-gray-50 dark:bg-gradient-to-br dark:from-slate-950 dark:to-slate-900">
       {/* Desktop Sidebar */}
       <div className="hidden md:block">
         <ErrorBoundary>
@@ -22,7 +22,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Mobile Header */}
-        <div className="md:hidden flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
+        <div className="md:hidden flex items-center justify-between p-4 border-b border-gray-200 dark:border-slate-700/50 bg-white dark:bg-slate-950/95 backdrop-blur-xl">
           <ErrorBoundary>
             <MobileNav />
           </ErrorBoundary>

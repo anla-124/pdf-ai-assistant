@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { searchSimilarDocuments } from '@/lib/pinecone'
 import { SimilaritySearchResult, SearchFilters } from '@/types'
+import CacheManager, { createCacheHash } from '@/lib/cache'
 
 export async function POST(
   request: NextRequest,
@@ -21,6 +22,18 @@ export async function POST(
 
     const body = await request.json()
     const { filters = {}, topK = 20 }: { filters?: SearchFilters; topK?: number } = body
+
+    // Create cache key from document ID, filters, and topK
+    const cacheKey = createCacheHash({ documentId: id, filters, topK })
+    
+    // Try to get cached results first
+    const cachedResults = await CacheManager.getSimilarDocuments(id, cacheKey)
+    if (cachedResults) {
+      console.log(`🚀 Cache hit for similarity search: ${id}`)
+      return NextResponse.json(cachedResults)
+    }
+    
+    console.log(`🔍 Cache miss for similarity search: ${id} - performing full search`)
 
     // Get the source document
     const { data: sourceDocument, error: docError } = await supabase
@@ -65,8 +78,42 @@ export async function POST(
       }, { status: 400 })
     }
 
-    // Source chunk count is simply the number of embeddings we fetched
-    const sourceDocChunkCount = sourceEmbeddings.length
+    // Filter source embeddings by page range if specified
+    let filteredSourceEmbeddings = sourceEmbeddings
+    if (filters.page_range && !filters.page_range.use_entire_document) {
+      const startPage = filters.page_range.start_page
+      const endPage = filters.page_range.end_page
+      
+      if (startPage && endPage) {
+        // Validate page range
+        if (startPage > endPage) {
+          return NextResponse.json({ 
+            error: 'Invalid page range: start page cannot be greater than end page' 
+          }, { status: 400 })
+        }
+
+        filteredSourceEmbeddings = sourceEmbeddings.filter(embedding => {
+          const pageNumber = embedding.page_number
+          return pageNumber && pageNumber >= startPage && pageNumber <= endPage
+        })
+        
+        console.log(`🔍 Page range filter: pages ${startPage}-${endPage}`)
+        console.log(`📄 Filtered from ${sourceEmbeddings.length} to ${filteredSourceEmbeddings.length} chunks`)
+        
+        // Check if any chunks were found in the specified page range
+        if (filteredSourceEmbeddings.length === 0) {
+          return NextResponse.json({ 
+            error: `No content found in pages ${startPage}-${endPage}. This document may not have page tracking or the page range is outside the document.`,
+            code: 'NO_CONTENT_IN_RANGE'
+          }, { status: 400 })
+        }
+      } else {
+        console.log('🔍 Page range specified but missing start_page or end_page, using entire document')
+      }
+    }
+
+    // Source chunk count is the number of embeddings after filtering
+    const sourceDocChunkCount = filteredSourceEmbeddings.length
 
     // Build Pinecone filter from search filters
     const pineconeFilter: Record<string, any> = {}
@@ -74,18 +121,50 @@ export async function POST(
     // Exclude the source document itself
     pineconeFilter.document_id = { $ne: id }
 
-    // Apply additional filters if provided
+    console.log(`🔍 Building metadata filters for similarity search...`)
+
+    // Apply business metadata filters if provided
+    if (filters.law_firm && filters.law_firm.length > 0) {
+      pineconeFilter['law_firm'] = { $in: filters.law_firm }
+      console.log(`📋 Law Firm filter: [${filters.law_firm.join(', ')}]`)
+    }
+
+    if (filters.fund_manager && filters.fund_manager.length > 0) {
+      pineconeFilter['fund_manager'] = { $in: filters.fund_manager }
+      console.log(`💼 Fund Manager filter: [${filters.fund_manager.join(', ')}]`)
+    }
+
+    if (filters.fund_admin && filters.fund_admin.length > 0) {
+      pineconeFilter['fund_admin'] = { $in: filters.fund_admin }
+      console.log(`🏢 Fund Admin filter: [${filters.fund_admin.join(', ')}]`)
+    }
+
+    if (filters.jurisdiction && filters.jurisdiction.length > 0) {
+      pineconeFilter['jurisdiction'] = { $in: filters.jurisdiction }
+      console.log(`🌍 Jurisdiction filter: [${filters.jurisdiction.join(', ')}]`)
+    }
+
+    // Legacy filters (keeping for backward compatibility)
     if (filters.investor_type && filters.investor_type.length > 0) {
-      pineconeFilter['metadata.investor_type'] = { $in: filters.investor_type }
+      pineconeFilter['investor_type'] = { $in: filters.investor_type }
     }
 
     if (filters.document_type && filters.document_type.length > 0) {
-      pineconeFilter['metadata.document_type'] = { $in: filters.document_type }
+      pineconeFilter['document_type'] = { $in: filters.document_type }
     }
 
     if (filters.tags && filters.tags.length > 0) {
-      pineconeFilter['metadata.tags'] = { $in: filters.tags }
+      pineconeFilter['tags'] = { $in: filters.tags }
     }
+
+    // Log final filter summary
+    const activeFilters = Object.keys(pineconeFilter).filter(key => key !== 'document_id')
+    if (activeFilters.length > 0) {
+      console.log(`📊 Active metadata filters: [${activeFilters.join(', ')}]`)
+    } else {
+      console.log(`📊 No metadata filters applied - searching all documents`)
+    }
+    console.log(`🎯 Final Pinecone filter:`, JSON.stringify(pineconeFilter, null, 2))
 
     // Get user's total document count for adaptive search optimization
     const { count: totalDocs } = await supabase
@@ -94,52 +173,66 @@ export async function POST(
       .eq('user_id', user.id)
       .eq('status', 'completed')
     
-    // Adaptive searchLimit based on library size
-    // Tiny libraries (1-10 docs): searchLimit = 30-50
-    // Small libraries (10-100 docs): searchLimit = 50-100
-    // Medium libraries (100-800 docs): searchLimit = 100-200  
-    // Large libraries (800+ docs): searchLimit = 200-250
+    // Thoughtfully optimized searchLimit based on library size and similarity patterns
+    // Tiny (1-20 docs): 15-25 - Every doc found easily, prioritize speed
+    // Small (20-100 docs): 25-50 - Fast searches with sufficient coverage  
+    // Medium (100-500 docs): 50-100 - Good balance of speed and thoroughness
+    // Large (500-1500 docs): 100-150 - Growth phase, thorough without excess
+    // Enterprise (1500-3000 docs): 150-200 - Target range, max thoroughness
+    // Massive (3000+ docs): 200-250 - Future growth, accept longer search times
     const librarySize = totalDocs || 0
     
     let searchLimit
-    if (librarySize <= 10) {
-      // For very small libraries, use minimal search
-      searchLimit = Math.max(topK * 2, 30) // Much more aggressive
+    if (librarySize <= 20) {
+      // Tiny libraries: Every document will be found easily
+      searchLimit = Math.min(25, Math.max(topK + 5, 15))
     } else if (librarySize <= 100) {
-      // Small libraries
-      searchLimit = Math.max(topK * 5, 50)
+      // Small libraries: Fast searches with sufficient coverage
+      searchLimit = Math.min(50, Math.max(topK + 10, 25))
+    } else if (librarySize <= 500) {
+      // Medium libraries: Good balance of speed and thoroughness
+      searchLimit = Math.min(100, Math.max(topK * 2, 50))
+    } else if (librarySize <= 1500) {
+      // Large libraries: Growth phase, thorough without excess
+      searchLimit = Math.min(150, Math.max(topK * 3, 100))
+    } else if (librarySize <= 3000) {
+      // Enterprise libraries: Target range, maximum thoroughness
+      searchLimit = Math.min(200, Math.max(topK * 4, 150))
     } else {
-      // Medium to large libraries  
-      const baseLimit = Math.max(topK * 10, 50)
-      const adaptiveLimit = Math.min(250, Math.max(50, Math.floor(librarySize / 8)))
-      searchLimit = Math.max(baseLimit, adaptiveLimit)
+      // Massive libraries: Future growth, accept longer search times
+      searchLimit = Math.min(250, Math.max(topK * 5, 200))
     }
     
     // Search for similar documents using each chunk from the source document
     const allSimilarVectors = new Map<string, {score: number, text: string, docId: string}>()
     
     console.log(`📊 Library size: ${librarySize} documents`)
-    console.log(`🔍 Adaptive searchLimit: ${searchLimit} per chunk (was fixed at 250)`)
-    if (librarySize <= 10) {
-      console.log(`💡 Tiny library calculation: Math.max(${topK} * 2, 30) = ${searchLimit}`)
-    } else if (librarySize <= 100) {
-      console.log(`💡 Small library calculation: Math.max(${topK} * 5, 50) = ${searchLimit}`)
-    } else {
-      const baseLimit = Math.max(topK * 10, 50)
-      const adaptiveLimit = Math.min(250, Math.max(50, Math.floor(librarySize / 8)))
-      console.log(`💡 Large library calculation: Math.max(${baseLimit}, ${adaptiveLimit}) = ${searchLimit}`)
-    }
-    console.log(`Searching with ${sourceEmbeddings.length} source chunks, searchLimit=${searchLimit} per chunk`)
+    console.log(`🔍 Optimized searchLimit: ${searchLimit} per chunk (was fixed at 250)`)
     
-    // Search with each source chunk embedding
-    for (let i = 0; i < sourceEmbeddings.length; i++) {
+    if (librarySize <= 20) {
+      console.log(`💡 Tiny library: Math.min(25, Math.max(${topK} + 5, 15)) = ${searchLimit}`)
+    } else if (librarySize <= 100) {
+      console.log(`💡 Small library: Math.min(50, Math.max(${topK} + 10, 25)) = ${searchLimit}`)
+    } else if (librarySize <= 500) {
+      console.log(`💡 Medium library: Math.min(100, Math.max(${topK} * 2, 50)) = ${searchLimit}`)
+    } else if (librarySize <= 1500) {
+      console.log(`💡 Large library: Math.min(150, Math.max(${topK} * 3, 100)) = ${searchLimit}`)
+    } else if (librarySize <= 3000) {
+      console.log(`💡 Enterprise library: Math.min(200, Math.max(${topK} * 4, 150)) = ${searchLimit}`)
+    } else {
+      console.log(`💡 Massive library: Math.min(250, Math.max(${topK} * 5, 200)) = ${searchLimit}`)
+    }
+    console.log(`Searching with ${filteredSourceEmbeddings.length} source chunks, searchLimit=${searchLimit} per chunk`)
+    
+    // Search with each filtered source chunk embedding
+    for (let i = 0; i < filteredSourceEmbeddings.length; i++) {
       // Check if request was cancelled
       if (request.signal?.aborted) {
         console.log('🛑 Similarity search cancelled by user at chunk', i)
         return new NextResponse('Search cancelled', { status: 499 })
       }
 
-      const sourceChunk = sourceEmbeddings[i]
+      const sourceChunk = filteredSourceEmbeddings[i]
       
       if (!sourceChunk.embedding) {
         console.warn(`Source chunk ${i} has no embedding, skipping`)
@@ -434,6 +527,10 @@ export async function POST(
           .slice(0, 3) // Keep top 3 matching chunks per document
       }
     })
+
+    // Cache the results for future requests
+    await CacheManager.setSimilarDocuments(id, cacheKey, results)
+    console.log(`💾 Cached similarity search results for ${id}`)
 
     return NextResponse.json(results)
 

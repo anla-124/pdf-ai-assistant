@@ -71,10 +71,13 @@ PINECONE_INDEX_NAME=pdf-documents
 
 1. **Create Supabase Project**: Go to [Supabase](https://supabase.com) and create a new project.
 
-2. **Run Database Schema**: Execute the SQL schema in your Supabase SQL editor:
+2. **Run Database Schema**: Execute the consolidated SQL schema in your Supabase SQL editor:
 ```bash
-cat supabase-schema.sql
+# Copy and paste the contents of database-complete-schema.sql
+# This includes all features: core schema, page tracking, batch processing
 ```
+
+   **Note:** This replaces all previous migration scripts. If you've run older scripts, see `DATABASE_MIGRATION_GUIDE.md`.
 
 3. **Configure Storage Bucket**: The schema will automatically create a `documents` storage bucket with proper RLS policies.
 

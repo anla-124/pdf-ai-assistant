@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -27,16 +28,47 @@ import {
   Square,
   CheckSquare,
   X,
-  Eye
+  Eye,
+  Edit,
+  Building,
+  Users,
+  Briefcase,
+  Globe,
+  ArrowUp,
+  ArrowDown,
+  FilterX
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
+import { EditDocumentMetadataModal } from './edit-document-metadata-modal'
+import { 
+  LAW_FIRM_OPTIONS, 
+  FUND_MANAGER_OPTIONS, 
+  FUND_ADMIN_OPTIONS, 
+  JURISDICTION_OPTIONS 
+} from '@/lib/metadata-constants'
+
+interface DocumentStatus {
+  phase: string
+  message: string
+  estimatedTimeRemaining?: string
+  processingMethod: 'sync' | 'batch'
+  isStale?: boolean
+}
 
 export function EnhancedDocumentList() {
   const [documents, setDocuments] = useState<Document[]>([])
   const [filteredDocuments, setFilteredDocuments] = useState<Document[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
-  const [sortBy, setSortBy] = useState<string>('created_at')
+  const [sortBy, setSortBy] = useState<string>('upload_time')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  
+  // Metadata filters
+  const [showFilters, setShowFilters] = useState(false)
+  const [lawFirmFilter, setLawFirmFilter] = useState<string[]>([])
+  const [fundManagerFilter, setFundManagerFilter] = useState<string[]>([])
+  const [fundAdminFilter, setFundAdminFilter] = useState<string[]>([])
+  const [jurisdictionFilter, setJurisdictionFilter] = useState<string[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
   const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
@@ -44,6 +76,51 @@ export function EnhancedDocumentList() {
   const [deletingDocuments, setDeletingDocuments] = useState<Set<string>>(new Set())
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false)
   const [isPolling, setIsPolling] = useState(false)
+  const [editingDocument, setEditingDocument] = useState<Document | null>(null)
+  const [documentStatuses, setDocumentStatuses] = useState<Map<string, DocumentStatus>>(new Map())
+
+  const handleDocumentUpdate = (updatedDocument: Document) => {
+    setDocuments(prev => prev.map(doc => 
+      doc.id === updatedDocument.id ? updatedDocument : doc
+    ))
+    setEditingDocument(null)
+  }
+
+  // Filter helper functions
+  const toggleSortOrder = () => {
+    setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')
+  }
+
+  const clearAllFilters = () => {
+    setLawFirmFilter([])
+    setFundManagerFilter([])
+    setFundAdminFilter([])
+    setJurisdictionFilter([])
+    setShowFilters(false)
+  }
+
+  const toggleFilters = () => {
+    setShowFilters(!showFilters)
+  }
+
+  const hasActiveFilters = () => {
+    return lawFirmFilter.length > 0 || 
+           fundManagerFilter.length > 0 || 
+           fundAdminFilter.length > 0 || 
+           jurisdictionFilter.length > 0
+  }
+
+  const handleDropdownFilterChange = (filterType: 'law_firm' | 'fund_manager' | 'fund_admin' | 'jurisdiction', selectedValues: string[]) => {
+    const setterMap = {
+      law_firm: setLawFirmFilter,
+      fund_manager: setFundManagerFilter,
+      fund_admin: setFundAdminFilter,
+      jurisdiction: setJurisdictionFilter
+    }
+
+    const setter = setterMap[filterType]
+    setter(selectedValues)
+  }
 
   // Multi-select helper functions
   const toggleSelectMode = () => {
@@ -190,6 +267,35 @@ export function EnhancedDocumentList() {
     }
   }, [])
 
+  const fetchDocumentStatus = useCallback(async (documentId: string) => {
+    try {
+      const response = await fetch(`/api/documents/${documentId}/status`)
+      if (!response.ok) {
+        console.error(`Failed to fetch status for document ${documentId}`)
+        return
+      }
+      const statusData = await response.json()
+      
+      if (statusData.detailed_status) {
+        setDocumentStatuses(prev => new Map(prev.set(documentId, statusData.detailed_status)))
+      }
+    } catch (err) {
+      console.error(`Error fetching status for document ${documentId}:`, err)
+    }
+  }, [])
+
+  const fetchAllProcessingStatuses = useCallback(async () => {
+    const processingDocs = documents.filter(doc => 
+      doc.status === 'processing' || doc.status === 'queued'
+    )
+    
+    if (processingDocs.length > 0) {
+      await Promise.all(
+        processingDocs.map(doc => fetchDocumentStatus(doc.id))
+      )
+    }
+  }, [documents, fetchDocumentStatus])
+
   useEffect(() => {
     fetchDocuments()
   }, [fetchDocuments])
@@ -204,11 +310,12 @@ export function EnhancedDocumentList() {
 
     if (hasProcessingDocs) {
       setIsPolling(true)
-      interval = setInterval(() => {
-        fetchDocuments(false) // Silent refresh without loading state
-      }, 2000) // Poll every 2 seconds for faster updates
+      interval = setInterval(async () => {
+        await fetchDocuments(false) // Silent refresh without loading state
+        await fetchAllProcessingStatuses() // Fetch enhanced statuses
+      }, 3000) // Poll every 3 seconds for detailed updates
 
-      console.log('Started polling for processing documents')
+      console.log('Started polling for processing documents with enhanced status')
     } else {
       setIsPolling(false)
       console.log('No processing documents, stopped polling')
@@ -219,7 +326,12 @@ export function EnhancedDocumentList() {
         clearInterval(interval)
       }
     }
-  }, [documents, fetchDocuments])
+  }, [documents, fetchDocuments, fetchAllProcessingStatuses])
+
+  // Fetch initial statuses for processing documents
+  useEffect(() => {
+    fetchAllProcessingStatuses()
+  }, [fetchAllProcessingStatuses])
 
   // Also poll periodically even when no processing docs to catch new uploads
   useEffect(() => {
@@ -232,30 +344,50 @@ export function EnhancedDocumentList() {
 
   useEffect(() => {
     let filtered = documents.filter(doc => {
-      const matchesSearch = doc.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        doc.filename.toLowerCase().includes(searchQuery.toLowerCase())
+      const matchesSearch = doc.title.toLowerCase().includes(searchQuery.toLowerCase())
       
       const matchesStatus = statusFilter === 'all' || doc.status === statusFilter
       
-      return matchesSearch && matchesStatus
+      // Metadata filters
+      const matchesLawFirm = lawFirmFilter.length === 0 || 
+        (doc.metadata?.law_firm && lawFirmFilter.includes(doc.metadata.law_firm))
+      
+      const matchesFundManager = fundManagerFilter.length === 0 || 
+        (doc.metadata?.fund_manager && fundManagerFilter.includes(doc.metadata.fund_manager))
+      
+      const matchesFundAdmin = fundAdminFilter.length === 0 || 
+        (doc.metadata?.fund_admin && fundAdminFilter.includes(doc.metadata.fund_admin))
+      
+      const matchesJurisdiction = jurisdictionFilter.length === 0 || 
+        (doc.metadata?.jurisdiction && jurisdictionFilter.includes(doc.metadata.jurisdiction))
+      
+      return matchesSearch && matchesStatus && matchesLawFirm && 
+             matchesFundManager && matchesFundAdmin && matchesJurisdiction
     })
 
     // Sort documents
     filtered = filtered.sort((a, b) => {
+      let comparison = 0
+      
       switch (sortBy) {
-        case 'title':
-          return a.title.localeCompare(b.title)
-        case 'created_at':
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        case 'file_size':
-          return b.file_size - a.file_size
+        case 'name':
+          comparison = a.title.localeCompare(b.title)
+          break
+        case 'upload_time':
+          comparison = new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          break
+        case 'size':
+          comparison = a.file_size - b.file_size
+          break
         default:
-          return 0
+          comparison = new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
       }
+      
+      return sortOrder === 'asc' ? comparison : -comparison
     })
 
     setFilteredDocuments(filtered)
-  }, [searchQuery, statusFilter, sortBy, documents])
+  }, [searchQuery, statusFilter, sortBy, sortOrder, documents, lawFirmFilter, fundManagerFilter, fundAdminFilter, jurisdictionFilter])
 
   const getStatusConfig = (status: Document['status']) => {
     switch (status) {
@@ -306,6 +438,11 @@ export function EnhancedDocumentList() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
   }
 
+  const formatPageCount = (pageCount?: number) => {
+    if (!pageCount || pageCount === 0) return null
+    return pageCount === 1 ? '1 page' : `${pageCount} pages`
+  }
+
   const getDocumentsByStatus = () => {
     return {
       all: documents.length,
@@ -344,7 +481,7 @@ export function EnhancedDocumentList() {
           {isPolling && (
             <div className="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current"></div>
-              <span>Auto-refreshing...</span>
+              <span>Live updates active</span>
             </div>
           )}
         </div>
@@ -442,20 +579,246 @@ export function EnhancedDocumentList() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-10"
-              aria-label="Search documents by title or filename"
+              aria-label="Search documents by title"
             />
           </div>
-          <Select value={sortBy} onValueChange={setSortBy}>
-            <SelectTrigger className="w-48" aria-label="Sort documents">
-              <SelectValue placeholder="Sort by..." />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="created_at">Recently Added</SelectItem>
-              <SelectItem value="title">Name (A-Z)</SelectItem>
-              <SelectItem value="file_size">File Size</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex items-center gap-2">
+            <Button
+              variant={showFilters ? "default" : "outline"}
+              size="sm"
+              onClick={toggleFilters}
+              className="flex items-center gap-2"
+            >
+              <Filter className="h-4 w-4" />
+              Filters
+              {hasActiveFilters() && (
+                <Badge variant="secondary" className="ml-1 text-xs">
+                  {lawFirmFilter.length + fundManagerFilter.length + fundAdminFilter.length + jurisdictionFilter.length}
+                </Badge>
+              )}
+            </Button>
+            <Select value={sortBy} onValueChange={setSortBy}>
+              <SelectTrigger className="w-40" aria-label="Sort documents">
+                <SelectValue placeholder="Sort by..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="upload_time">Upload Time</SelectItem>
+                <SelectItem value="name">Name</SelectItem>
+                <SelectItem value="size">Size</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={toggleSortOrder}
+              className="px-3"
+              aria-label={`Sort ${sortOrder === 'asc' ? 'ascending' : 'descending'}`}
+            >
+              {sortOrder === 'asc' ? (
+                <ArrowUp className="h-4 w-4" />
+              ) : (
+                <ArrowDown className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
         </div>
+
+        {/* Metadata Filters */}
+        {showFilters && (
+          <div className="border rounded-lg p-4 space-y-3 bg-gray-50 dark:bg-slate-800/60 filter-panel-enhanced">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Filter className="h-4 w-4 text-gray-500" />
+                <span className="text-sm font-medium">Filter Documents</span>
+              </div>
+              {hasActiveFilters() && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearAllFilters}
+                  className="text-xs h-auto py-1 px-2"
+                >
+                  <FilterX className="h-3 w-3 mr-1" />
+                  Clear All
+                </Button>
+              )}
+            </div>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Law Firm Filter */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2 text-xs font-medium">
+                  <Building className="h-3 w-3" />
+                  Law Firm
+                </Label>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="w-full justify-between text-xs h-8">
+                      {lawFirmFilter.length > 0 ? (
+                        <span>{lawFirmFilter.length} selected</span>
+                      ) : (
+                        <span className="text-gray-500">Select...</span>
+                      )}
+                      <ArrowDown className="h-3 w-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-48">
+                    {LAW_FIRM_OPTIONS.map(option => (
+                      <DropdownMenuItem
+                        key={option.value}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          const newSelection = lawFirmFilter.includes(option.value)
+                            ? lawFirmFilter.filter(item => item !== option.value)
+                            : [...lawFirmFilter, option.value]
+                          setLawFirmFilter(newSelection)
+                        }}
+                        className="flex items-center space-x-2"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={lawFirmFilter.includes(option.value)}
+                          onChange={() => {}} // Handled by onClick above
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-xs">{option.label}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+
+              {/* Fund Manager Filter */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2 text-xs font-medium">
+                  <Users className="h-3 w-3" />
+                  Fund Manager
+                </Label>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="w-full justify-between text-xs h-8">
+                      {fundManagerFilter.length > 0 ? (
+                        <span>{fundManagerFilter.length} selected</span>
+                      ) : (
+                        <span className="text-gray-500">Select...</span>
+                      )}
+                      <ArrowDown className="h-3 w-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-48">
+                    {FUND_MANAGER_OPTIONS.map(option => (
+                      <DropdownMenuItem
+                        key={option.value}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          const newSelection = fundManagerFilter.includes(option.value)
+                            ? fundManagerFilter.filter(item => item !== option.value)
+                            : [...fundManagerFilter, option.value]
+                          setFundManagerFilter(newSelection)
+                        }}
+                        className="flex items-center space-x-2"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={fundManagerFilter.includes(option.value)}
+                          onChange={() => {}} // Handled by onClick above
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-xs">{option.label}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+
+              {/* Fund Admin Filter */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2 text-xs font-medium">
+                  <Briefcase className="h-3 w-3" />
+                  Fund Admin
+                </Label>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="w-full justify-between text-xs h-8">
+                      {fundAdminFilter.length > 0 ? (
+                        <span>{fundAdminFilter.length} selected</span>
+                      ) : (
+                        <span className="text-gray-500">Select...</span>
+                      )}
+                      <ArrowDown className="h-3 w-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-48">
+                    {FUND_ADMIN_OPTIONS.map(option => (
+                      <DropdownMenuItem
+                        key={option.value}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          const newSelection = fundAdminFilter.includes(option.value)
+                            ? fundAdminFilter.filter(item => item !== option.value)
+                            : [...fundAdminFilter, option.value]
+                          setFundAdminFilter(newSelection)
+                        }}
+                        className="flex items-center space-x-2"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={fundAdminFilter.includes(option.value)}
+                          onChange={() => {}} // Handled by onClick above
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-xs">{option.label}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+
+              {/* Jurisdiction Filter */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2 text-xs font-medium">
+                  <Globe className="h-3 w-3" />
+                  Jurisdiction
+                </Label>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="w-full justify-between text-xs h-8">
+                      {jurisdictionFilter.length > 0 ? (
+                        <span>{jurisdictionFilter.length} selected</span>
+                      ) : (
+                        <span className="text-gray-500">Select...</span>
+                      )}
+                      <ArrowDown className="h-3 w-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-48">
+                    {JURISDICTION_OPTIONS.map(option => (
+                      <DropdownMenuItem
+                        key={option.value}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          const newSelection = jurisdictionFilter.includes(option.value)
+                            ? jurisdictionFilter.filter(item => item !== option.value)
+                            : [...jurisdictionFilter, option.value]
+                          setJurisdictionFilter(newSelection)
+                        }}
+                        className="flex items-center space-x-2"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={jurisdictionFilter.includes(option.value)}
+                          onChange={() => {}} // Handled by onClick above
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-xs">{option.label}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+          </div>
+        )}
 
         <TabsContent value={statusFilter} className="space-y-4">
           {error && (
@@ -491,12 +854,24 @@ export function EnhancedDocumentList() {
               const StatusIcon = statusConfig.icon
               
               return (
-                <Card key={document.id} className={`group hover:shadow-lg transition-all duration-200 hover:-translate-y-1 ${
+                <Card key={document.id} className={`group hover:shadow-lg transition-all duration-200 hover:-translate-y-1 card-enhanced ${
                   isSelectMode && selectedDocuments.has(document.id) ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-950/20' : ''
                 }`} role="article" aria-labelledby={`document-title-${document.id}`}>
                   <CardHeader className="pb-3">
                     <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <div className="p-2 bg-blue-50 dark:bg-gradient-to-br dark:from-blue-900/60 dark:to-blue-800/40 rounded-lg border dark:border-blue-700/30" aria-hidden="true">
+                            <FileText className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <CardTitle id={`document-title-${document.id}`} className="text-base font-semibold truncate">
+                              {document.title}
+                            </CardTitle>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
                         {isSelectMode && (
                           <Button
                             variant="ghost"
@@ -512,22 +887,7 @@ export function EnhancedDocumentList() {
                             )}
                           </Button>
                         )}
-                        <div className="p-2 bg-blue-50 dark:bg-blue-950/50 rounded-lg" aria-hidden="true">
-                          <FileText className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <CardTitle id={`document-title-${document.id}`} className="text-base font-semibold truncate">
-                            {document.title}
-                          </CardTitle>
-                          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                            {document.filename}
-                          </p>
-                          <p className="text-xs text-gray-400 dark:text-gray-500 truncate font-mono">
-                            ID: {document.id}
-                          </p>
-                        </div>
-                      </div>
-                      <DropdownMenu>
+                        <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button 
                             variant="ghost" 
@@ -554,6 +914,14 @@ export function EnhancedDocumentList() {
                             <CheckSquare className="h-4 w-4 mr-2" />
                             Select Documents
                           </DropdownMenuItem>
+                          <DropdownMenuItem 
+                            onClick={() => setEditingDocument(document)}
+                            className="flex items-center"
+                          >
+                            <Edit className="h-4 w-4 mr-2" />
+                            Edit Details
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
                           <AlertDialog>
                             <AlertDialogTrigger asChild>
                               <DropdownMenuItem 
@@ -586,34 +954,165 @@ export function EnhancedDocumentList() {
                             </AlertDialogContent>
                           </AlertDialog>
                         </DropdownMenuContent>
-                      </DropdownMenu>
+                        </DropdownMenu>
+                      </div>
                     </div>
                   </CardHeader>
 
                   <CardContent className="space-y-4">
-                    {/* Status Badge */}
-                    <div className="flex items-center justify-between">
-                      <Badge className={`${statusConfig.color} flex items-center gap-1`}>
-                        <StatusIcon className="h-3 w-3" />
-                        {statusConfig.label}
-                      </Badge>
-                      <span className="text-xs text-gray-500 dark:text-gray-400">
-                        {formatFileSize(document.file_size)}
-                      </span>
-                    </div>
+                    {/* Enhanced Status Display */}
+                    {(() => {
+                      const enhancedStatus = documentStatuses.get(document.id)
+                      const isProcessing = document.status === 'processing' || document.status === 'queued'
+                      
+                      return (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <Badge className={`${statusConfig.color} flex items-center gap-1`}>
+                              <StatusIcon className="h-3 w-3" />
+                              {enhancedStatus?.phase || statusConfig.label}
+                            </Badge>
+                            <div className="text-xs text-gray-500 dark:text-gray-400 text-right">
+                              <div>{formatFileSize(document.file_size)}</div>
+                              {formatPageCount(document.page_count) && (
+                                <div className="text-gray-400 dark:text-gray-500">
+                                  {formatPageCount(document.page_count)}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          
+                          {/* Enhanced Status Message for Processing Documents */}
+                          {isProcessing && enhancedStatus && (
+                            <div className="space-y-2">
+                              <div className="text-xs text-gray-600 dark:text-gray-400">
+                                {enhancedStatus.message}
+                              </div>
+                              
+                              {/* Progress Bar - Visual indicator */}
+                              {(() => {
+                                const getProgressFromPhase = (phase: string, method: string) => {
+                                  if (method === 'batch') {
+                                    switch (phase) {
+                                      case 'Preparing Batch': return 20
+                                      case 'Batch Processing': return 60
+                                      default: return 10
+                                    }
+                                  } else {
+                                    switch (phase) {
+                                      case 'Starting': return 15
+                                      case 'Analyzing Document': return 40
+                                      case 'Extracting Data': return 70
+                                      case 'Generating Embeddings': return 90
+                                      default: return 30
+                                    }
+                                  }
+                                }
+                                
+                                const progress = getProgressFromPhase(enhancedStatus.phase, enhancedStatus.processingMethod)
+                                
+                                return (
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-xs">
+                                      <span className="text-gray-500 dark:text-gray-400">
+                                        Progress
+                                      </span>
+                                      <span className="text-gray-600 dark:text-gray-400 font-medium">
+                                        {progress}%
+                                      </span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
+                                      <div 
+                                        className={`h-1.5 rounded-full transition-all duration-500 ${
+                                          enhancedStatus.processingMethod === 'batch' 
+                                            ? 'bg-purple-500 dark:bg-purple-400' 
+                                            : 'bg-blue-500 dark:bg-blue-400'
+                                        }`}
+                                        style={{ width: `${progress}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                )
+                              })()}
+                              
+                              {enhancedStatus.estimatedTimeRemaining && (
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="text-gray-500 dark:text-gray-400">
+                                    Est. time remaining:
+                                  </span>
+                                  <span className={`font-medium ${enhancedStatus.isStale ? 'text-orange-600 dark:text-orange-400' : 'text-blue-600 dark:text-blue-400'}`}>
+                                    {enhancedStatus.estimatedTimeRemaining}
+                                  </span>
+                                </div>
+                              )}
+                              
+                              {enhancedStatus.processingMethod === 'batch' && (
+                                <div className="flex items-center gap-1 text-xs text-purple-600 dark:text-purple-400">
+                                  <Clock className="h-3 w-3" />
+                                  <span>Batch processing (large document)</span>
+                                </div>
+                              )}
+                              
+                              {enhancedStatus.isStale && (
+                                <div className="flex items-center gap-1 text-xs text-orange-600 dark:text-orange-400">
+                                  <AlertCircle className="h-3 w-3" />
+                                  <span>Status checking...</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
 
                     {/* Metadata Tags */}
                     {document.metadata && (
-                      <div className="flex gap-2 flex-wrap">
-                        {document.metadata.investor_type && (
-                          <Badge variant="outline" className="text-xs">
-                            {document.metadata.investor_type}
-                          </Badge>
+                      <div className="space-y-2">
+                        {/* Legacy metadata */}
+                        {(document.metadata.investor_type || document.metadata.document_type) && (
+                          <div className="flex gap-2 flex-wrap">
+                            {document.metadata.investor_type && (
+                              <Badge variant="outline" className="text-xs">
+                                {document.metadata.investor_type}
+                              </Badge>
+                            )}
+                            {document.metadata.document_type && (
+                              <Badge variant="outline" className="text-xs">
+                                {document.metadata.document_type}
+                              </Badge>
+                            )}
+                          </div>
                         )}
-                        {document.metadata.document_type && (
-                          <Badge variant="outline" className="text-xs">
-                            {document.metadata.document_type}
-                          </Badge>
+                        
+                        {/* Business metadata */}
+                        {(document.metadata.law_firm || document.metadata.fund_manager || 
+                          document.metadata.fund_admin || document.metadata.jurisdiction) && (
+                          <div className="grid grid-cols-2 gap-1 text-xs text-gray-600 dark:text-gray-400">
+                            {document.metadata.law_firm && (
+                              <div className="flex items-center gap-1">
+                                <Building className="h-3 w-3" />
+                                <span className="truncate">{document.metadata.law_firm}</span>
+                              </div>
+                            )}
+                            {document.metadata.fund_manager && (
+                              <div className="flex items-center gap-1">
+                                <Users className="h-3 w-3" />
+                                <span className="truncate">{document.metadata.fund_manager}</span>
+                              </div>
+                            )}
+                            {document.metadata.fund_admin && (
+                              <div className="flex items-center gap-1">
+                                <Briefcase className="h-3 w-3" />
+                                <span className="truncate">{document.metadata.fund_admin}</span>
+                              </div>
+                            )}
+                            {document.metadata.jurisdiction && (
+                              <div className="flex items-center gap-1">
+                                <Globe className="h-3 w-3" />
+                                <span className="truncate">{document.metadata.jurisdiction}</span>
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
@@ -660,6 +1159,14 @@ export function EnhancedDocumentList() {
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* Edit Document Metadata Modal */}
+      <EditDocumentMetadataModal
+        document={editingDocument}
+        isOpen={!!editingDocument}
+        onClose={() => setEditingDocument(null)}
+        onSuccess={handleDocumentUpdate}
+      />
     </div>
   )
 }

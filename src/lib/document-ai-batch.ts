@@ -121,21 +121,50 @@ export class DocumentAIBatchProcessor {
     try {
       console.log(`Checking batch operation status: ${operationId}`)
       
-      // For now, we'll handle this as a simple status check
-      // The actual operation status would be checked via Google Cloud Operations API
-      // This is a simplified implementation for deployment compatibility
+      // Extract document ID from operation ID to check for output files
+      const supabase = createServiceClient()
+      const { data: job, error: jobError } = await supabase
+        .from('document_jobs')
+        .select('document_id')
+        .eq('batch_operation_id', operationId)
+        .single()
       
-      // Simplified status implementation - assumes operation is in progress
-      // In production, this would poll Google Cloud Operations API
-      const status: BatchOperationStatus['status'] = 'RUNNING'
-      const progress = 0
+      if (jobError || !job) {
+        console.log(`No job found for operation ${operationId}, assuming RUNNING`)
+        return {
+          operationId,
+          status: 'RUNNING',
+          progress: 0,
+        }
+      }
       
-      console.log(`Batch operation status check: ${operationId} - ${status}`)
-
-      return {
-        operationId,
-        status,
-        progress,
+      // Check if batch output files exist in GCS
+      try {
+        const outputExists = await gcsManager.checkBatchOutputExists(job.document_id)
+        
+        if (outputExists) {
+          console.log(`Batch operation completed: ${operationId}`)
+          return {
+            operationId,
+            status: 'SUCCEEDED',
+            progress: 100,
+          }
+        } else {
+          console.log(`Batch operation still running: ${operationId}`)
+          return {
+            operationId,
+            status: 'RUNNING',
+            progress: 0,
+          }
+        }
+      } catch (gcsError) {
+        console.error('Error checking GCS output:', gcsError)
+        // If we can't check GCS, assume it's still running
+        return {
+          operationId,
+          status: 'RUNNING',
+          progress: 0,
+        }
       }
 
     } catch (error) {
@@ -222,9 +251,13 @@ export class DocumentAIBatchProcessor {
       // Extract text and structured fields from combined document
       const extractedText = combinedText
       const extractedFields = this.extractStructuredFields(combinedDocument)
+      
+      // Extract page count from combined document
+      const pageCount = allPages.length
 
       console.log(`Extracted text length: ${extractedText.length}`)
       console.log(`Extracted fields count: ${extractedFields.fields?.length || 0}`)
+      console.log(`Total pages processed: ${pageCount}`)
 
       // Update document with extracted data
       const { error: updateError } = await supabase
@@ -232,6 +265,7 @@ export class DocumentAIBatchProcessor {
         .update({
           extracted_text: extractedText,
           extracted_fields: extractedFields,
+          page_count: pageCount,
           status: 'processing', // Keep processing until embeddings complete
         })
         .eq('id', documentId)
