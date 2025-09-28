@@ -51,7 +51,7 @@ UPSTASH_REDIS_REST_TOKEN=your_upstash_token
 4. **Deploy!**
 
 ### **3. Database Setup:**
-Run the SQL commands from `database/performance-optimizations.sql` in your Supabase SQL editor for maximum performance.
+Run the complete optimized schema from `database-optimized-schema.sql` in your Supabase SQL editor. This single file includes all performance optimizations and replaces all previous database scripts.
 
 ## 🔧 **Optional: Add Upstash Redis**
 
