@@ -315,7 +315,12 @@ export class CacheManager {
   static async getMultiple(keys: string[]) {
     try {
       const values = await redis.mget(...keys)
-      return values.map(value => value ? JSON.parse(value) : null)
+      return values.map(value => {
+        if (value) {
+          return typeof value === 'string' ? JSON.parse(value) : value
+        }
+        return null
+      })
     } catch (error) {
       console.warn('Cache mget error:', error)
       return new Array(keys.length).fill(null)
