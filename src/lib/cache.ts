@@ -329,13 +329,19 @@ export class CacheManager {
 
   static async setMultiple(keyValuePairs: Array<{key: string, value: any, ttl?: number}>) {
     try {
-      const pipeline = redis.pipeline()
-      
-      keyValuePairs.forEach(({ key, value, ttl }) => {
-        pipeline.setex(key, ttl || 300, JSON.stringify(value))
-      })
-      
-      await pipeline.exec()
+      if ('pipeline' in redis) {
+        // ioredis
+        const pipeline = (redis as Redis).pipeline()
+        keyValuePairs.forEach(({ key, value, ttl }) => {
+          pipeline.setex(key, ttl || 300, JSON.stringify(value))
+        })
+        await pipeline.exec()
+      } else {
+        // Upstash Redis - set individually
+        for (const { key, value, ttl } of keyValuePairs) {
+          await (redis as UpstashRedis).set(key, JSON.stringify(value), { ex: ttl || 300 })
+        }
+      }
     } catch (error) {
       console.warn('Cache mset error:', error)
     }
@@ -354,13 +360,21 @@ export class CacheManager {
   // Cache statistics
   static async getStats() {
     try {
-      const info = await redis.info('memory')
-      const keyspace = await redis.info('keyspace')
-      
-      return {
-        memory: info,
-        keyspace: keyspace,
-        timestamp: new Date().toISOString()
+      if ('info' in redis) {
+        const info = await (redis as Redis).info('memory')
+        const keyspace = await (redis as Redis).info('keyspace')
+        return {
+          memory: info,
+          keyspace: keyspace,
+          timestamp: new Date().toISOString()
+        }
+      } else {
+        // Upstash Redis doesn't support info command
+        return {
+          memory: 'N/A (Upstash Redis)',
+          keyspace: 'N/A (Upstash Redis)',
+          timestamp: new Date().toISOString()
+        }
       }
     } catch (error) {
       console.warn('Cache stats error:', error)
@@ -371,7 +385,10 @@ export class CacheManager {
   // Graceful cleanup
   static async disconnect() {
     try {
-      await redis.disconnect()
+      if ('disconnect' in redis) {
+        await (redis as Redis).disconnect()
+      }
+      // Upstash Redis doesn't need explicit disconnect
     } catch (error) {
       console.warn('Cache disconnect error:', error)
     }
