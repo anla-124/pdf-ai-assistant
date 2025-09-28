@@ -72,10 +72,10 @@ export class CacheManager {
       // Handle different Redis clients
       if ('setex' in redis) {
         // ioredis
-        await redis.setex(key, ttl, value)
+        await (redis as Redis).setex(key, ttl, value)
       } else {
         // Upstash Redis
-        await redis.set(key, value, { ex: ttl })
+        await (redis as UpstashRedis).set(key, value, { ex: ttl })
       }
     } catch (error) {
       console.warn('Cache set error:', error)
@@ -87,7 +87,10 @@ export class CacheManager {
   static async getEmbeddings(documentId: string) {
     try {
       const cached = await redis.get(`${CACHE_KEYS.EMBEDDINGS}${documentId}`)
-      return cached ? JSON.parse(cached) : null
+      if (cached) {
+        return typeof cached === 'string' ? JSON.parse(cached) : cached
+      }
+      return null
     } catch (error) {
       console.warn('Cache get embeddings error:', error)
       return null
@@ -96,11 +99,14 @@ export class CacheManager {
 
   static async setEmbeddings(documentId: string, embeddings: any[]) {
     try {
-      await redis.setex(
-        `${CACHE_KEYS.EMBEDDINGS}${documentId}`,
-        CACHE_TTL.EMBEDDINGS,
-        JSON.stringify(embeddings)
-      )
+      const key = `${CACHE_KEYS.EMBEDDINGS}${documentId}`
+      const value = JSON.stringify(embeddings)
+      
+      if ('setex' in redis) {
+        await (redis as Redis).setex(key, CACHE_TTL.EMBEDDINGS, value)
+      } else {
+        await (redis as UpstashRedis).set(key, value, { ex: CACHE_TTL.EMBEDDINGS })
+      }
     } catch (error) {
       console.warn('Cache set embeddings error:', error)
     }
@@ -207,10 +213,10 @@ export class CacheManager {
       // Handle different Redis clients
       if ('setex' in redis) {
         // ioredis
-        await redis.setex(key, CACHE_TTL.SIMILAR_DOCS, value)
+        await (redis as Redis).setex(key, CACHE_TTL.SIMILAR_DOCS, value)
       } else {
         // Upstash Redis
-        await redis.set(key, value, { ex: CACHE_TTL.SIMILAR_DOCS })
+        await (redis as UpstashRedis).set(key, value, { ex: CACHE_TTL.SIMILAR_DOCS })
       }
       
       console.log(`✅ Cache SET success: ${key}`)
