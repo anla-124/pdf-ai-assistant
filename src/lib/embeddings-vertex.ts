@@ -1,8 +1,10 @@
 // Google Vertex AI Embeddings - Free alternative to OpenAI
 import { GoogleAuth } from 'google-auth-library'
+import { getGoogleClientOptions } from '@/lib/google-credentials'
 
+const clientOptions = getGoogleClientOptions()
 const auth = new GoogleAuth({
-  keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+  ...clientOptions,
   scopes: ['https://www.googleapis.com/auth/cloud-platform'],
 })
 

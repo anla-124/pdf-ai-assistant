@@ -5,11 +5,9 @@ import { indexDocumentInPinecone } from '@/lib/pinecone'
 import { detectOptimalProcessor, getProcessorId, getProcessorName } from '@/lib/document-ai-config'
 import { batchProcessor } from '@/lib/document-ai-batch'
 import CacheManager from '@/lib/cache'
+import { getGoogleClientOptions } from '@/lib/google-credentials'
 
-const client = new DocumentProcessorServiceClient({
-  projectId: process.env.GOOGLE_CLOUD_PROJECT_ID!,
-  keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-})
+const client = new DocumentProcessorServiceClient(getGoogleClientOptions())
 
 export async function processDocument(documentId: string): Promise<{ switchedToBatch?: boolean }> {
   const supabase = createServiceClient()

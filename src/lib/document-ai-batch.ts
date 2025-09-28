@@ -2,11 +2,9 @@ import { DocumentProcessorServiceClient } from '@google-cloud/documentai'
 import { createServiceClient } from '@/lib/supabase/server'
 import { gcsManager } from '@/lib/gcs-batch-config'
 import { getProcessorId, getProcessorName, detectOptimalProcessor } from '@/lib/document-ai-config'
+import { getGoogleClientOptions } from '@/lib/google-credentials'
 
-const client = new DocumentProcessorServiceClient({
-  projectId: process.env.GOOGLE_CLOUD_PROJECT_ID!,
-  keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-})
+const client = new DocumentProcessorServiceClient(getGoogleClientOptions())
 
 export interface BatchOperationStatus {
   operationId: string

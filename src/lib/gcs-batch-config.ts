@@ -1,10 +1,8 @@
 import { Storage } from '@google-cloud/storage'
+import { getGoogleClientOptions } from '@/lib/google-credentials'
 
 // Initialize Google Cloud Storage client
-const storage = new Storage({
-  projectId: process.env.GOOGLE_CLOUD_PROJECT_ID!,
-  keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-})
+const storage = new Storage(getGoogleClientOptions())
 
 export const GCS_CONFIG = {
   BUCKET_NAME: process.env.GOOGLE_CLOUD_STORAGE_BUCKET!,
