@@ -158,11 +158,14 @@ export class CacheManager {
 
   static async setProcessingStatus(documentId: string, status: any) {
     try {
-      await redis.setex(
-        `${CACHE_KEYS.PROCESSING_STATUS}${documentId}`,
-        CACHE_TTL.PROCESSING_STATUS,
-        JSON.stringify(status)
-      )
+      const key = `${CACHE_KEYS.PROCESSING_STATUS}${documentId}`
+      const value = JSON.stringify(status)
+      
+      if ('setex' in redis) {
+        await (redis as Redis).setex(key, CACHE_TTL.PROCESSING_STATUS, value)
+      } else {
+        await (redis as UpstashRedis).set(key, value, { ex: CACHE_TTL.PROCESSING_STATUS })
+      }
     } catch (error) {
       console.warn('Cache set status error:', error)
     }
@@ -172,7 +175,10 @@ export class CacheManager {
   static async getDashboardData(userId: string) {
     try {
       const cached = await redis.get(`${CACHE_KEYS.DASHBOARD_DATA}${userId}`)
-      return cached ? JSON.parse(cached) : null
+      if (cached) {
+        return typeof cached === 'string' ? JSON.parse(cached) : cached
+      }
+      return null
     } catch (error) {
       console.warn('Cache get dashboard error:', error)
       return null
@@ -181,11 +187,14 @@ export class CacheManager {
 
   static async setDashboardData(userId: string, data: any) {
     try {
-      await redis.setex(
-        `${CACHE_KEYS.DASHBOARD_DATA}${userId}`,
-        CACHE_TTL.DASHBOARD_DATA,
-        JSON.stringify(data)
-      )
+      const key = `${CACHE_KEYS.DASHBOARD_DATA}${userId}`
+      const value = JSON.stringify(data)
+      
+      if ('setex' in redis) {
+        await (redis as Redis).setex(key, CACHE_TTL.DASHBOARD_DATA, value)
+      } else {
+        await (redis as UpstashRedis).set(key, value, { ex: CACHE_TTL.DASHBOARD_DATA })
+      }
     } catch (error) {
       console.warn('Cache set dashboard error:', error)
     }
@@ -239,7 +248,10 @@ export class CacheManager {
   static async getUserStats(userId: string) {
     try {
       const cached = await redis.get(`${CACHE_KEYS.USER_STATS}${userId}`)
-      return cached ? JSON.parse(cached) : null
+      if (cached) {
+        return typeof cached === 'string' ? JSON.parse(cached) : cached
+      }
+      return null
     } catch (error) {
       console.warn('Cache get user stats error:', error)
       return null
@@ -248,11 +260,14 @@ export class CacheManager {
 
   static async setUserStats(userId: string, stats: any) {
     try {
-      await redis.setex(
-        `${CACHE_KEYS.USER_STATS}${userId}`,
-        CACHE_TTL.USER_STATS,
-        JSON.stringify(stats)
-      )
+      const key = `${CACHE_KEYS.USER_STATS}${userId}`
+      const value = JSON.stringify(stats)
+      
+      if ('setex' in redis) {
+        await (redis as Redis).setex(key, CACHE_TTL.USER_STATS, value)
+      } else {
+        await (redis as UpstashRedis).set(key, value, { ex: CACHE_TTL.USER_STATS })
+      }
     } catch (error) {
       console.warn('Cache set user stats error:', error)
     }
