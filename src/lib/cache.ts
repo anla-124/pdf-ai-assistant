@@ -7,12 +7,10 @@ const redis = new Redis({
   host: process.env.REDIS_HOST || 'localhost',
   port: parseInt(process.env.REDIS_PORT || '6379'),
   password: process.env.REDIS_PASSWORD,
-  retryDelayOnFailover: 100,
   enableReadyCheck: true,
   maxRetriesPerRequest: 3,
   lazyConnect: true,
   showFriendlyErrorStack: true,
-  keepAlive: 30000,
 })
 
 // Cache key prefixes
@@ -62,16 +60,6 @@ export class CacheManager {
     }
   }
 
-  static async invalidateDocument(documentId: string) {
-    try {
-      await redis.del(`${CACHE_KEYS.DOCUMENT}${documentId}`)
-      // Also invalidate related caches
-      await this.invalidatePattern(`${CACHE_KEYS.SEARCH_RESULTS}*${documentId}*`)
-      await this.invalidatePattern(`${CACHE_KEYS.SIMILAR_DOCS}${documentId}:*`)
-    } catch (error) {
-      console.warn('Cache invalidation error:', error)
-    }
-  }
 
   // Embeddings caching (for expensive similarity searches)
   static async getEmbeddings(documentId: string) {
@@ -165,13 +153,6 @@ export class CacheManager {
     }
   }
 
-  static async invalidateDashboardData(userId: string) {
-    try {
-      await redis.del(`${CACHE_KEYS.DASHBOARD_DATA}${userId}`)
-    } catch (error) {
-      console.warn('Cache invalidation error:', error)
-    }
-  }
 
   // Similar documents caching
   static async getSimilarDocuments(documentId: string, filtersHash: string) {
@@ -288,7 +269,7 @@ export class CacheManager {
       await redis.ping()
       return { status: 'healthy', timestamp: new Date().toISOString() }
     } catch (error) {
-      return { status: 'unhealthy', error: error.message, timestamp: new Date().toISOString() }
+      return { status: 'unhealthy', error: error instanceof Error ? error.message : 'Unknown error', timestamp: new Date().toISOString() }
     }
   }
 

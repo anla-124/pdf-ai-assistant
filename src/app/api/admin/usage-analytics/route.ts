@@ -59,15 +59,15 @@ async function getDailyStats(supabase: any) {
     const date = new Date(Date.now() - i * 24 * 60 * 60 * 1000)
     const dateStr = date.toISOString().split('T')[0]
     
-    const docsForDay = documents?.filter(doc => 
+    const docsForDay = documents?.filter((doc: any) => 
       doc.created_at.startsWith(dateStr)
     ) || []
     
-    const searchesForDay = searches?.filter(search => 
+    const searchesForDay = searches?.filter((search: any) => 
       search.created_at.startsWith(dateStr)
     ) || []
     
-    const uniqueUsers = new Set(docsForDay.map(doc => doc.user_id))
+    const uniqueUsers = new Set(docsForDay.map((doc: any) => doc.user_id))
     
     dailyStats.push({
       date: dateStr,
@@ -154,7 +154,7 @@ async function getUserActivity(supabase: any) {
     .from('documents')
     .select('user_id')
 
-  const totalUsers = new Set(allUsers?.map(doc => doc.user_id) || []).size
+  const totalUsers = new Set(allUsers?.map((doc: any) => doc.user_id) || []).size
 
   // Get users active today (uploaded/processed documents)
   const { data: todayDocs } = await supabase
@@ -162,7 +162,7 @@ async function getUserActivity(supabase: any) {
     .select('user_id')
     .gte('created_at', today)
 
-  const activeUsersToday = new Set(todayDocs?.map(doc => doc.user_id) || []).size
+  const activeUsersToday = new Set(todayDocs?.map((doc: any) => doc.user_id) || []).size
 
   // Get users active this week
   const { data: weekDocs } = await supabase
@@ -170,7 +170,7 @@ async function getUserActivity(supabase: any) {
     .select('user_id')
     .gte('created_at', weekAgo)
 
-  const activeUsersWeek = new Set(weekDocs?.map(doc => doc.user_id) || []).size
+  const activeUsersWeek = new Set(weekDocs?.map((doc: any) => doc.user_id) || []).size
 
   // Calculate average documents per user
   const totalDocs = allUsers?.length || 0

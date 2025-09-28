@@ -166,7 +166,7 @@ async function reprocessDocumentEmbeddings(documentId: string, metadata: any) {
   
   // Update each embedding vector in Pinecone with business metadata
   for (const embedding of embeddings) {
-    const vectorMetadata = {
+    const vectorMetadata: any = {
       document_id: documentId,
       chunk_index: embedding.chunk_index || 0,
       text: embedding.chunk_text,
