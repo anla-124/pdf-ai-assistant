@@ -1,4 +1,4 @@
-# 🚀 Deployment Guide - PDF AI Assistant
+# 🚀 Deployment Guide - PDF Searcher
 
 Your app is now **production-ready** with major performance optimizations!
 

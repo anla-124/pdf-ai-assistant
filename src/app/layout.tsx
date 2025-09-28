@@ -5,7 +5,7 @@ import './globals.css'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'PDF AI Assistant',
+  title: 'PDF Searcher',
   description: 'AI-powered PDF document processing and similarity search',
 }
 

@@ -48,7 +48,7 @@ export default function LoginPage() {
           <div className="mx-auto w-16 h-16 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center mb-4">
             <span className="text-2xl font-bold text-white">AI</span>
           </div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">PDF AI Assistant</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">PDF Searcher</h1>
           <p className="text-gray-600 dark:text-gray-400 mt-2">AI-powered document analysis and search</p>
         </div>
 

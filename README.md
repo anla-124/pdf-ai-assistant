@@ -1,6 +1,6 @@
-# PDF AI Assistant
+# PDF Searcher
 
-A production-ready MVP web application for processing PDF subscription documents with AI-powered similarity search. Built for internal company use with secure authentication and role-based access.
+A production-ready web application for processing PDF subscription documents with AI-powered similarity search. Built for internal company use with secure authentication and role-based access.
 
 ## Features
 
